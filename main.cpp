@@ -62,9 +62,17 @@ struct Model
 };
 using Reducer = function<Model(Model&)>;
 
+struct WordCount
+{
+    string word;
+    int count;
+    vector<float> all;
+};
+
 set<string> ignoredWords{
 // added
-"rt", "like", "just", "tomorrow", "new", "year", "month", "day", "today", "make", "let", "want", "did", 
+"rt", "like", "just", "tomorrow", "new", "year", "month", "day", "today", "make", "let", "want", "did", "going", "good", "really", "know", "people", "got", "life", "need", "say", "doing", "great", "right", "time", "best", "happy", "stop", "think", "world", "watch", "gonna", "remember", "way",
+"better", "team", "check", "feel", "talk", "hurry", "look", "live", "home", "game", "run",
 // http://xpo6.com/list-of-english-stop-words/
 "a", "about", "above", "above", "across", "after", "afterwards", "again", "against", "all", "almost", "alone", "along", "already", "also","although","always","am","among", "amongst", "amoungst", "amount",  "an", "and", "another", "any","anyhow","anyone","anything","anyway", "anywhere", "are", "around", "as",  "at", "back","be","became", "because","become","becomes", "becoming", "been", "before", "beforehand", "behind", "being", "below", "beside", "besides", "between", "beyond", "bill", "both", "bottom","but", "by", "call", "can", "cannot", "cant", "co", "con", "could", "couldnt", "cry", "de", "describe", "detail", "do", "done", "down", "due", "during", "each", "eg", "eight", "either", "eleven","else", "elsewhere", "empty", "enough", "etc", "even", "ever", "every", "everyone", "everything", "everywhere", "except", "few", "fifteen", "fify", "fill", "find", "fire", "first", "five", "for", "former", "formerly", "forty", "found", "four", "from", "front", "full", "further", "get", "give", "go", "had", "has", "hasnt", "have", "he", "hence", "her", "here", "hereafter", "hereby", "herein", "hereupon", "hers", "herself", "him", "himself", "his", "how", "however", "hundred", "ie", "if", "in", "inc", "indeed", "interest", "into", "is", "it", "its", "itself", "keep", "last", "latter", "latterly", "least", "less", "ltd", "made", "many", "may", "me", "meanwhile", "might", "mill", "mine", "more", "moreover", "most", "mostly", "move", "much", "must", "my", "myself", "name", "namely", "neither", "never", "nevertheless", "next", "nine", "no", "nobody", "none", "noone", "nor", "not", "nothing", "now", "nowhere", "of", "off", "often", "on", "once", "one", "only", "onto", "or", "other", "others", "otherwise", "our", "ours", "ourselves", "out", "over", "own","part", "per", "perhaps", "please", "put", "rather", "re", "same", "see", "seem", "seemed", "seeming", "seems", "serious", "several", "she", "should", "show", "side", "since", "sincere", "six", "sixty", "so", "some", "somehow", "someone", "something", "sometime", "sometimes", "somewhere", "still", "such", "system", "take", "ten", "than", "that", "the", "their", "them", "themselves", "then", "thence", "there", "thereafter", "thereby", "therefore", "therein", "thereupon", "these", "they", "thickv", "thin", "third", "this", "those", "though", "three", "through", "throughout", "thru", "thus", "to", "together", "too", "top", "toward", "towards", "twelve", "twenty", "two", "un", "under", "until", "up", "upon", "us", "very", "via", "was", "we", "well", "were", "what", "whatever", "when", "whence", "whenever", "where", "whereafter", "whereas", "whereby", "wherein", "whereupon", "wherever", "whether", "which", "while", "whither", "who", "whoever", "whole", "whom", "whose", "why", "will", "with", "within", "without", "would", "yet", "you", "your", "yours", "yourself", "yourselves", "the"};
 
@@ -296,7 +304,7 @@ int main(int argc, const char *argv[])
                         auto rangeend = rangebegin+minutes(1);
                         auto searchend = rangeend+minutes(2);
                         auto offset = milliseconds(0);
-                        for (;rangebegin+offset < searchend;offset += milliseconds(500)){
+                        for (;rangebegin+offset < searchend;offset += milliseconds(5000)){
                             if (rangebegin+offset <= t && t < rangeend+offset) {
                                 auto key = TimeRange{rangebegin+offset, rangeend+offset};
                                 auto it = m.groupedtweets.find(key);
@@ -335,7 +343,7 @@ int main(int argc, const char *argv[])
         as_dynamic();
 
     auto windowtpm = t$ |
-        window_with_time(milliseconds(60000), milliseconds(500), poolthread) |
+        window_with_time(milliseconds(60000), milliseconds(5000), poolthread) |
         rxo::map([](observable<shared_ptr<const json>> source){
             auto tweetsperminute = source | count() | rxo::map([](int count){
                 return Reducer([=](Model& m){
@@ -449,7 +457,7 @@ int main(int argc, const char *argv[])
                     tpm.clear();
                     transform(m.tweetsperminute.begin(), m.tweetsperminute.end(), back_inserter(tpm), [](int count){return static_cast<float>(count);});
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
-                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, fltmax, fltmax, plotextent);
+                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, fltmax, plotextent);
                 }
 
                 // by group
@@ -474,7 +482,7 @@ int main(int argc, const char *argv[])
 
                     ImVec2 plotposition = ImGui::GetCursorScreenPos();
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
-                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, fltmax, fltmax, plotextent);
+                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, fltmax, plotextent);
                     static int idx = 0;
                     if (ImGui::IsItemHovered()) {
                         const float t = Clamp((ImGui::GetMousePos().x - plotposition.x) / plotextent.x, 0.0f, 0.9999f);
@@ -484,29 +492,46 @@ int main(int argc, const char *argv[])
                         auto& window = m.groups.at(idx);
                         auto& group = m.groupedtweets.at(window);
 
-                        ImGui::Columns(2);
-                        RXCPP_UNWIND_AUTO([](){
-                            ImGui::Columns(1, "##closecolumns");
-                        });
+                        time_t tb = duration_cast<seconds>(window.begin).count();
+                        struct tm* tmb = gmtime(&tb);
+                        std::stringstream buffer;
+                        buffer << std::put_time(tmb, "%a %b %d %H:%M:%S %Y");
 
-                        ImGui::Text("Start : %lld", window.begin.count());
+                        ImGui::Text("Start : %lld, %s", window.begin.count(), buffer.str().c_str());
                         ImGui::Text("Tweets: %ld", group->tweets.size());
                         ImGui::Text("Words : %ld", group->words.size());
 
-                        ImGui::NextColumn();
-
-                        ImGui::Text("Top 10 words:");
                         ImGui::Separator();
 
-                        static vector<pair<string, int>> words;
+                        ImGui::Text("Top 10 words:");
+
+                        static vector<WordCount> words;
                         words.clear();
-                        copy(group->words.begin(), group->words.end(), back_inserter(words));
-                        sort(words.begin(), words.end(), [](const pair<string, int>& l, const pair<string, int>& r){
-                            return l.second > r.second;
+                        transform(group->words.begin(), group->words.end(), back_inserter(words), [&](const pair<string, int>& word){
+                            return WordCount{word.first, word.second, {}};
+                        });
+                        sort(words.begin(), words.end(), [](const WordCount& l, const WordCount& r){
+                            return l.count > r.count;
                         });
                         words.resize(10);
+
+                        for(auto& w : m.groups) {
+                            auto& g = m.groupedtweets.at(w);
+                            auto end = g->words.end();
+                            for(auto& word : words) {
+                                auto wrd = g->words.find(word.word);
+                                float count = 0.0f;
+                                if (wrd != end) {
+                                    count = static_cast<float>(wrd->second);
+                                }
+                                word.all.push_back(count);
+                            }
+                        }
+
                         for (auto& w : words) {
-                            ImGui::Text("%d - %s", w.second, w.first.c_str());
+                            ImGui::Text("%d - %s", w.count, w.word.c_str());
+                            ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
+                            ImGui::PlotLines("", &w.all[0], w.all.size(), 0, nullptr, 0.0f, fltmax, plotextent);
                         }
                     }
                 }
