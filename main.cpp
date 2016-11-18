@@ -35,8 +35,6 @@ using namespace rxcurl;
 #include <SDL.h>
 
 
-#if 1
-
 struct TimeRange
 {
     using timestamp = milliseconds;
@@ -77,7 +75,9 @@ const unordered_set<string> ignoredWords{
 // http://xpo6.com/list-of-english-stop-words/
 "a", "about", "above", "above", "across", "after", "afterwards", "again", "against", "all", "almost", "alone", "along", "already", "also","although","always","am","among", "amongst", "amoungst", "amount",  "an", "and", "another", "any","anyhow","anyone","anything","anyway", "anywhere", "are", "around", "as",  "at", "back","be","became", "because","become","becomes", "becoming", "been", "before", "beforehand", "behind", "being", "below", "beside", "besides", "between", "beyond", "bill", "both", "bottom","but", "by", "call", "can", "cannot", "cant", "co", "con", "could", "couldnt", "cry", "de", "describe", "detail", "do", "done", "down", "due", "during", "each", "eg", "eight", "either", "eleven","else", "elsewhere", "empty", "enough", "etc", "even", "ever", "every", "everyone", "everything", "everywhere", "except", "few", "fifteen", "fify", "fill", "find", "fire", "first", "five", "for", "former", "formerly", "forty", "found", "four", "from", "front", "full", "further", "get", "give", "go", "had", "has", "hasnt", "have", "he", "hence", "her", "here", "hereafter", "hereby", "herein", "hereupon", "hers", "herself", "him", "himself", "his", "how", "however", "hundred", "ie", "if", "in", "inc", "indeed", "interest", "into", "is", "it", "its", "itself", "keep", "last", "latter", "latterly", "least", "less", "ltd", "made", "many", "may", "me", "meanwhile", "might", "mill", "mine", "more", "moreover", "most", "mostly", "move", "much", "must", "my", "myself", "name", "namely", "neither", "never", "nevertheless", "next", "nine", "no", "nobody", "none", "noone", "nor", "not", "nothing", "now", "nowhere", "of", "off", "often", "on", "once", "one", "only", "onto", "or", "other", "others", "otherwise", "our", "ours", "ourselves", "out", "over", "own","part", "per", "perhaps", "please", "put", "rather", "re", "same", "see", "seem", "seemed", "seeming", "seems", "serious", "several", "she", "should", "show", "side", "since", "sincere", "six", "sixty", "so", "some", "somehow", "someone", "something", "sometime", "sometimes", "somewhere", "still", "such", "system", "take", "ten", "than", "that", "the", "their", "them", "themselves", "then", "thence", "there", "thereafter", "thereby", "therefore", "therein", "thereupon", "these", "they", "thickv", "thin", "third", "this", "those", "though", "three", "through", "throughout", "thru", "thus", "to", "together", "too", "top", "toward", "towards", "twelve", "twenty", "two", "un", "under", "until", "up", "upon", "us", "very", "via", "was", "we", "well", "were", "what", "whatever", "when", "whence", "whenever", "where", "whereafter", "whereas", "whereby", "wherein", "whereupon", "wherever", "whether", "which", "while", "whither", "who", "whoever", "whole", "whom", "whose", "why", "will", "with", "within", "without", "would", "yet", "you", "your", "yours", "yourself", "yourselves", "the"};
 
-#endif
+const auto length = milliseconds(60000);
+const auto every = milliseconds(5000);
+const auto keep = minutes(4);
 
 inline float  Clamp(float v, float mn, float mx)                       { return (v < mn) ? mn : (v > mx) ? mx : v; }
 inline ImVec2 Clamp(const ImVec2& f, const ImVec2& mn, ImVec2 mx)      { return ImVec2(Clamp(f.x,mn.x,mx.x), Clamp(f.y,mn.y,mx.y)); }
@@ -86,7 +86,7 @@ inline string tolower(string s) {
     return s;
 }
 
-auto twitterrequest = [](::rxcurl::rxcurl& factory, string URL, string method, string CONS_KEY, string CONS_SEC, string ATOK_KEY, string ATOK_SEC){
+auto twitterrequest = [](::rxcurl::rxcurl factory, string URL, string method, string CONS_KEY, string CONS_SEC, string ATOK_KEY, string ATOK_SEC){
 
     string url;
     {
@@ -103,11 +103,13 @@ auto twitterrequest = [](::rxcurl::rxcurl& factory, string URL, string method, s
         url = signedurl;
     }
 
-    return factory.create(http_request{url, method})
-        .map([](http_response r){
-            return r.body.chunks;
-        })
-        .merge();
+    return observable<>::defer([=](){
+        return factory.create(http_request{url, method})
+            .map([](http_response r){
+                return r.body.chunks;
+            })
+            .merge();
+    });
 };
 
 string tweettext(const json& tweet) {
@@ -283,7 +285,7 @@ int main(int argc, const char *argv[])
         }) |
         rxo::map([=](grouped_observable<minutes, shared_ptr<const json>> g){
             auto group = g | 
-                take_until(observable<>::timer(minutes(2)), identity_current_thread()) | 
+                take_until(observable<>::timer(length * 2), identity_current_thread()) | 
                 scan(noop, [=](Reducer&, const shared_ptr<const json>& tw){
                     auto& tweet = *tw;
                     if (!tweet.count("timestamp_ms")) {
@@ -313,11 +315,11 @@ int main(int argc, const char *argv[])
 
                     return Reducer([=](Model& m){
                         auto t = milliseconds(stoll(tweet["timestamp_ms"].get<string>()));
-                        auto rangebegin = duration_cast<milliseconds>(g.get_key() - minutes(2));
-                        auto rangeend = rangebegin+minutes(1);
-                        auto searchend = rangeend+minutes(2);
+                        auto rangebegin = duration_cast<milliseconds>(g.get_key() - duration_cast<minutes>(length*2));
+                        auto rangeend = rangebegin+duration_cast<minutes>(length);
+                        auto searchend = rangeend+duration_cast<minutes>(length*2);
                         auto offset = milliseconds(0);
-                        for (;rangebegin+offset < searchend;offset += milliseconds(5000)){
+                        for (;rangebegin+offset < searchend;offset += duration_cast<milliseconds>(every)){
                             if (rangebegin+offset <= t && t < rangeend+offset) {
                                 auto key = TimeRange{rangebegin+offset, rangeend+offset};
                                 auto it = m.groupedtweets.find(key);
@@ -336,7 +338,7 @@ int main(int argc, const char *argv[])
                             }
                         }
 
-                        while(!m.groups.empty() && m.groups.front().begin + minutes(4) < m.groups.back().end) {
+                        while(!m.groups.empty() && m.groups.front().begin + keep < m.groups.back().end) {
                             // remove group
                             m.groupedtweets.erase(m.groups.front());
                             m.groups.pop_front();
@@ -356,14 +358,17 @@ int main(int argc, const char *argv[])
         as_dynamic();
 
     auto windowtpm = t$ |
-        window_with_time(milliseconds(60000), milliseconds(5000), poolthread) |
+        window_with_time(length, every, poolthread) |
         rxo::map([](observable<shared_ptr<const json>> source){
             auto tweetsperminute = source | count() | rxo::map([](int count){
                 return Reducer([=](Model& m){
                     m.tweetsperminute.push_back(count);
-                    while(m.tweetsperminute.size() > (2 * 60 * 2)) {
+
+                    static const auto maxsize = duration_cast<seconds>(keep).count()/duration_cast<seconds>(every).count();
+                    while(static_cast<long long>(m.tweetsperminute.size()) > maxsize) {
                         m.tweetsperminute.pop_front();
                     }
+
                     return std::move(m);
                 });
             }) |
@@ -505,12 +510,21 @@ int main(int argc, const char *argv[])
                         auto& window = m.groups.at(idx);
                         auto& group = m.groupedtweets.at(window);
 
-                        time_t tb = duration_cast<seconds>(window.begin).count();
-                        struct tm* tmb = gmtime(&tb);
                         stringstream buffer;
-                        buffer << put_time(tmb, "%a %b %d %H:%M:%S %Y");
-
+                        {
+                            time_t tb = duration_cast<seconds>(window.begin).count();
+                            struct tm* tmb = gmtime(&tb);
+                            buffer.str("");
+                            buffer << put_time(tmb, "%a %b %d %H:%M:%S %Y");
+                        }
                         ImGui::Text("Start : %lld, %s", window.begin.count(), buffer.str().c_str());
+                        {
+                            time_t tb = duration_cast<seconds>(window.end).count();
+                            struct tm* tmb = gmtime(&tb);
+                            buffer.str("");
+                            buffer << put_time(tmb, "%a %b %d %H:%M:%S %Y");
+                        }
+                        ImGui::Text("End   : %lld, %s", window.end.count(), buffer.str().c_str());
                         ImGui::Text("Tweets: %ld", group->tweets.size());
                         ImGui::Text("Words : %ld", group->words.size());
 
@@ -603,10 +617,50 @@ int main(int argc, const char *argv[])
     } else {
         string method = isFilter ? "POST" : "GET";
 
+        auto tweetthread = observe_on_new_thread();
         twitterrequest(factory, URL, method, CONS_KEY, CONS_SEC, ATOK_KEY, ATOK_SEC)
-            .on_error_resume_next([](std::exception_ptr ep){
-                cerr << rxu::what(ep) << endl;
-                return observable<>::empty<string>();
+            // https://dev.twitter.com/streaming/overview/connecting
+            .timeout(seconds(90), tweetthread)
+            .on_error_resume_next([=](std::exception_ptr ep) -> observable<string> {
+                try {rethrow_exception(ep);}
+                catch (const http_exception& ex) {
+                    cerr << ex.what() << endl;
+                    if (ex.code() == CURLE_COULDNT_RESOLVE_HOST ||
+                        ex.code() == CURLE_COULDNT_CONNECT ||
+                        ex.code() == CURLE_OPERATION_TIMEDOUT ||
+                        ex.code() == CURLE_BAD_CONTENT_ENCODING ||
+                        ex.code() == CURLE_REMOTE_FILE_NOT_FOUND) {
+                        cerr << "error - waiting to retry.." << endl;
+                        return observable<>::timer(seconds(5), tweetthread).map([](long){return string{};}).ignore_elements();
+                    } else if (ex.code() == CURLE_GOT_NOTHING ||
+                        ex.code() == CURLE_PARTIAL_FILE ||
+                        ex.code() == CURLE_SEND_ERROR ||
+                        ex.code() == CURLE_RECV_ERROR) {
+                        cerr << "reconnecting after TCP error" << endl;
+                        return observable<>::empty<string>();
+                    } else if (ex.code() == CURLE_HTTP_RETURNED_ERROR || ex.httpStatus() > 200) {
+                        if (ex.httpStatus() == 420) {
+                            cerr << "rate limited - waiting to retry.." << endl;
+                            return observable<>::timer(minutes(1), tweetthread).map([](long){return string{};}).ignore_elements();
+                        } else if (ex.httpStatus() == 404 ||
+                            ex.httpStatus() == 406 ||
+                            ex.httpStatus() == 413 ||
+                            ex.httpStatus() == 416) {
+                            cerr << "invalid request - exit" << endl;
+                            return observable<>::error<string>(ep, tweetthread);
+                        }
+                        return observable<>::timer(seconds(5), tweetthread).map([](long){return string{};}).ignore_elements();
+                    }
+                }
+                catch (const timeout_error& ex) {
+                    cerr << "reconnecting after timeout" << endl;
+                    return observable<>::empty<string>();
+                }
+                catch (const exception& ex) {
+                    cerr << ex.what() << endl;
+                    terminate();
+                }
+                return observable<>::error<string>(ep, tweetthread);
             })
             .repeat()
             .subscribe(lifetime, chunkbus.get_subscriber());

@@ -11,7 +11,5 @@ CMAKE is used for the build. There are depenedcies on several libraries. (curl, 
 
 This project has only been built and tested on OS X.
 
-There are several shortcuts in place - error handling and retry and completion handling have all gotten short-shrift.
-
 I uploaded a video of the app running during on election night 2016
 [![election 2016 live twitter](https://img.youtube.com/vi/ewvW4fYE4aQ/0.jpg)](https://www.youtube.com/watch?v=ewvW4fYE4aQ)
