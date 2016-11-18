@@ -88,22 +88,23 @@ inline string tolower(string s) {
 
 auto twitterrequest = [](::rxcurl::rxcurl factory, string URL, string method, string CONS_KEY, string CONS_SEC, string ATOK_KEY, string ATOK_SEC){
 
-    string url;
-    {
-        char* signedurl = nullptr;
-        RXCPP_UNWIND_AUTO([&](){
-            if (!!signedurl) {
-                free(signedurl);
-            }
-        });
-        signedurl = oauth_sign_url2(
-            URL.c_str(), NULL, OA_HMAC, method.c_str(),
-            CONS_KEY.c_str(), CONS_SEC.c_str(), ATOK_KEY.c_str(), ATOK_SEC.c_str()
-        );
-        url = signedurl;
-    }
-
     return observable<>::defer([=](){
+
+        string url;
+        {
+            char* signedurl = nullptr;
+            RXCPP_UNWIND_AUTO([&](){
+                if (!!signedurl) {
+                    free(signedurl);
+                }
+            });
+            signedurl = oauth_sign_url2(
+                URL.c_str(), NULL, OA_HMAC, method.c_str(),
+                CONS_KEY.c_str(), CONS_SEC.c_str(), ATOK_KEY.c_str(), ATOK_SEC.c_str()
+            );
+            url = signedurl;
+        }
+
         return factory.create(http_request{url, method})
             .map([](http_response r){
                 return r.body.chunks;
