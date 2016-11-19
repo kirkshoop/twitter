@@ -55,6 +55,7 @@ struct Model
     int total = 0;
     deque<TimeRange> groups;
     std::map<TimeRange, shared_ptr<TweetGroup>> groupedtweets;
+    seconds tweetsstart;
     deque<int> tweetsperminute;
     deque<shared_ptr<const json>> tail;
 };
@@ -86,6 +87,17 @@ inline string tolower(string s) {
     return s;
 }
 
+inline string utctextfrom(seconds time) {
+    stringstream buffer;
+    time_t tb = time.count();
+    struct tm* tmb = gmtime(&tb);
+    buffer << put_time(tmb, "%a %b %d %H:%M:%S %Y");
+    return buffer.str();
+}
+inline string utctextfrom(system_clock::time_point time = system_clock::now()) {
+    return utctextfrom(time_point_cast<seconds>(time).time_since_epoch());
+}
+
 auto twitterrequest = [](::rxcurl::rxcurl factory, string URL, string method, string CONS_KEY, string CONS_SEC, string ATOK_KEY, string ATOK_SEC){
 
     return observable<>::defer([=](){
@@ -109,7 +121,7 @@ auto twitterrequest = [](::rxcurl::rxcurl factory, string URL, string method, st
             .map([](http_response r){
                 return r.body.chunks;
             })
-            .merge();
+            .merge(tweetthread);
     });
 };
 
@@ -273,25 +285,75 @@ int main(int argc, const char *argv[])
     };
     auto frame$ = framebus.get_observable();
 
-    auto grouptpm = t$ |
-        group_by([](shared_ptr<const json> tw) {
-            auto& tweet = *tw;
-            if (!tweet.count("timestamp_ms")) {
-                return minutes(~0);
-            } else {
-                auto t = milliseconds(stoll(tweet["timestamp_ms"].get<string>()));
-                auto m = duration_cast<minutes>(t);
-                return m;
+    auto updategroups = [](
+        Model& m,
+        milliseconds timestamp, 
+        const shared_ptr<const json>& tw = shared_ptr<const json>{}, 
+        const vector<string>& words = vector<string>{}) {
+
+        auto rangebegin = duration_cast<minutes>(timestamp - length);
+        auto rangeend = rangebegin+duration_cast<minutes>(length);
+        auto searchend = timestamp + length;
+        auto offset = milliseconds(0);
+        for (;rangeend+offset < searchend;offset += duration_cast<milliseconds>(every)){
+            auto key = TimeRange{rangebegin+offset, rangeend+offset};
+            auto it = m.groupedtweets.find(key);
+            if (it == m.groupedtweets.end()) {
+                // add group
+                m.groups.push_back(key);
+                sort(m.groups.begin(), m.groups.end());
+                it = m.groupedtweets.insert(make_pair(key, make_shared<TweetGroup>())).first;
             }
+
+            if (!!tw) {
+                if (rangebegin+offset <= timestamp && timestamp < rangeend+offset) {
+                    it->second->tweets.push_back(tw);
+
+                    for (auto& word: words) {
+                        ++it->second->words[word];
+                    }
+                }
+            }
+        }
+
+        while(!m.groups.empty() && m.groups.front().begin + keep < m.groups.back().begin) {
+            // remove group
+            m.groupedtweets.erase(m.groups.front());
+            m.groups.pop_front();
+        }
+    };
+
+    auto groupbuckets = observable<>::interval(every, poolthread) |
+        rxo::map([=](long){
+            return Reducer([=](Model& m){
+                auto rangebegin = time_point_cast<milliseconds>(system_clock::now()).time_since_epoch();
+                updategroups(m, rangebegin);
+                return std::move(m);
+            });
+        }) |
+        on_error_resume_next([](std::exception_ptr ep){
+            cerr << rxu::what(ep) << endl;
+            return observable<>::empty<Reducer>();
+        }) |
+        start_with(noop) |
+        as_dynamic();
+
+    auto grouptpm = t$ |
+        filter([](const shared_ptr<const json>& tw){
+            auto& tweet = *tw;
+            return !!tweet.count("timestamp_ms");
+        }) |
+        group_by([](const shared_ptr<const json>& tw) {
+            auto& tweet = *tw;
+            auto t = milliseconds(stoll(tweet["timestamp_ms"].get<string>()));
+            auto m = duration_cast<minutes>(t);
+            return m;
         }) |
         rxo::map([=](grouped_observable<minutes, shared_ptr<const json>> g){
             auto group = g | 
-                take_until(observable<>::timer(length * 2), identity_current_thread()) | 
-                scan(noop, [=](Reducer&, const shared_ptr<const json>& tw){
+                take_until(observable<>::timer(length * 2), poolthread) | 
+                rxo::map([=](const shared_ptr<const json>& tw){
                     auto& tweet = *tw;
-                    if (!tweet.count("timestamp_ms")) {
-                        return noop;
-                    }
 
                     // exclude entities, urls and some punct from this words list
                     auto text = tweettext(tweet);
@@ -316,38 +378,13 @@ int main(int argc, const char *argv[])
 
                     return Reducer([=](Model& m){
                         auto t = milliseconds(stoll(tweet["timestamp_ms"].get<string>()));
-                        auto rangebegin = duration_cast<milliseconds>(g.get_key() - duration_cast<minutes>(length*2));
-                        auto rangeend = rangebegin+duration_cast<minutes>(length);
-                        auto searchend = rangeend+duration_cast<minutes>(length*2);
-                        auto offset = milliseconds(0);
-                        for (;rangebegin+offset < searchend;offset += duration_cast<milliseconds>(every)){
-                            if (rangebegin+offset <= t && t < rangeend+offset) {
-                                auto key = TimeRange{rangebegin+offset, rangeend+offset};
-                                auto it = m.groupedtweets.find(key);
-                                if (it == m.groupedtweets.end()) {
-                                    // add group
-                                    m.groups.push_back(key);
-                                    sort(m.groups.begin(), m.groups.end());
-                                    it = m.groupedtweets.insert(make_pair(key, make_shared<TweetGroup>())).first;
-                                }
 
-                                it->second->tweets.push_back(tw);
-
-                                for (auto& word: words) {
-                                    ++it->second->words[word];
-                                }
-                            }
-                        }
-
-                        while(!m.groups.empty() && m.groups.front().begin + keep < m.groups.back().end) {
-                            // remove group
-                            m.groupedtweets.erase(m.groups.front());
-                            m.groups.pop_front();
-                        }
+                        updategroups(m, t, tw, words);
 
                         return std::move(m);
                     });
                 }) |
+                observe_on(tweetthread) |
                 on_error_resume_next([](std::exception_ptr ep){
                     cerr << rxu::what(ep) << endl;
                     return observable<>::empty<Reducer>();
@@ -359,24 +396,46 @@ int main(int argc, const char *argv[])
         as_dynamic();
 
     auto windowtpm = t$ |
+        filter([](const shared_ptr<const json>& tw){
+            auto& tweet = *tw;
+            return !!tweet.count("timestamp_ms");
+        }) |
         window_with_time(length, every, poolthread) |
         rxo::map([](observable<shared_ptr<const json>> source){
-            auto tweetsperminute = source | count() | rxo::map([](int count){
-                return Reducer([=](Model& m){
-                    m.tweetsperminute.push_back(count);
+            auto rangebegin = time_point_cast<seconds>(system_clock::now()).time_since_epoch();
+            auto tweetsperminute = source | 
+                rxo::map([=](const shared_ptr<const json>&) {
+                    return Reducer([=](Model& m){
 
-                    static const auto maxsize = duration_cast<seconds>(keep).count()/duration_cast<seconds>(every).count();
-                    while(static_cast<long long>(m.tweetsperminute.size()) > maxsize) {
-                        m.tweetsperminute.pop_front();
-                    }
+                        static const auto maxsize = duration_cast<seconds>(keep).count()/duration_cast<seconds>(every).count();
 
-                    return std::move(m);
+                        if (m.tweetsperminute.size() == 0) {
+                            m.tweetsstart = rangebegin;
+                        }
+
+                        if (rangebegin >= m.tweetsstart) {
+
+                            const auto i = duration_cast<seconds>(rangebegin - m.tweetsstart).count()/duration_cast<seconds>(every).count();
+
+                            while (i >= int(m.tweetsperminute.size())) {
+                                m.tweetsperminute.push_back(0);
+                            }
+
+                            ++m.tweetsperminute[i];
+                        }
+
+                        while(static_cast<long long>(m.tweetsperminute.size()) > maxsize) {
+                            m.tweetsstart += duration_cast<seconds>(every);
+                            m.tweetsperminute.pop_front();
+                        }
+
+                        return std::move(m);
+                    });
+                }) |
+                on_error_resume_next([](std::exception_ptr ep){
+                    cerr << rxu::what(ep) << endl;
+                    return observable<>::empty<Reducer>();
                 });
-            }) |
-            on_error_resume_next([](std::exception_ptr ep){
-                cerr << rxu::what(ep) << endl;
-                return observable<>::empty<Reducer>();
-            });
             return tweetsperminute;
         }) |
         merge() |
@@ -384,13 +443,14 @@ int main(int argc, const char *argv[])
         as_dynamic();
 
     auto tail = t$ |
-        rxo::map([=](const shared_ptr<const json>& tw){
+        filter([](const shared_ptr<const json>& tw){
             auto& tweet = *tw;
-            if (!tweet.count("timestamp_ms")) {
-                return noop;
-            }
+            return !!tweet.count("timestamp_ms");
+        }) |
+        buffer_with_time(milliseconds(1000), poolthread) |
+        rxo::map([=](const vector<shared_ptr<const json>>& tws){
             return Reducer([=](Model& m){
-                m.tail.push_back(tw);
+                m.tail.insert(m.tail.end(), tws.begin(), tws.end());
                 while(m.tail.size() > 100) {
                     m.tail.pop_front();
                 }
@@ -405,16 +465,21 @@ int main(int argc, const char *argv[])
         as_dynamic();
 
     auto total = t$ |
-        rxo::map([=](const shared_ptr<const json>& tw){
+        filter([](const shared_ptr<const json>& tw){
             auto& tweet = *tw;
-            if (!tweet.count("timestamp_ms")) {
-                return noop;
-            }
-            return Reducer([=](Model& m){
-                ++m.total;
-                return std::move(m);
-            });
+            return !!tweet.count("timestamp_ms");
         }) |
+        window_with_time(milliseconds(1000), poolthread) |
+        rxo::map([](observable<shared_ptr<const json>> source){
+            auto tweetsperminute = source | count() | rxo::map([](int count){
+                return Reducer([=](Model& m){
+                    m.total += count;
+                    return std::move(m);
+                });
+            });
+            return tweetsperminute;
+        }) |
+        merge() |
         on_error_resume_next([](std::exception_ptr ep){
             cerr << rxu::what(ep) << endl;
             return observable<>::empty<Reducer>();
@@ -423,7 +488,7 @@ int main(int argc, const char *argv[])
         as_dynamic();
 
     // combine things that modify the model
-    auto reducer$ = from(windowtpm, grouptpm, total, tail) |
+    auto reducer$ = from(windowtpm, groupbuckets, grouptpm, total, tail) |
         merge(tweetthread);
 
     auto model$ = reducer$ |
@@ -467,7 +532,7 @@ int main(int argc, const char *argv[])
                 });
 
                 ImGui::TextWrapped("url: %s", URL.c_str());
-                ImGui::Text("Total Tweets: %d", m.total);
+                ImGui::Text("Total Tweets: %d, Now: %s", m.total, utctextfrom().c_str());
 
                 // by window
                 if (ImGui::CollapsingHeader("Tweets Per Minute (windowed)"))
@@ -476,6 +541,11 @@ int main(int argc, const char *argv[])
                     tpm.clear();
                     transform(m.tweetsperminute.begin(), m.tweetsperminute.end(), back_inserter(tpm), [](int count){return static_cast<float>(count);});
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
+                    if (!m.tweetsperminute.empty()) {
+                        ImGui::Text("%s -> %s", 
+                            utctextfrom(duration_cast<seconds>(m.tweetsstart)).c_str(),
+                            utctextfrom(duration_cast<seconds>(m.tweetsstart + length + (every * m.tweetsperminute.size()))).c_str());
+                    }
                     ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, fltmax, plotextent);
                 }
 
@@ -499,6 +569,11 @@ int main(int argc, const char *argv[])
                         });
                     }
 
+                    if (!m.groupedtweets.empty()) {
+                        ImGui::Text("%s -> %s", 
+                            utctextfrom(duration_cast<seconds>(m.groups.front().begin)).c_str(),
+                            utctextfrom(duration_cast<seconds>(m.groups.back().end)).c_str());
+                    }
                     ImVec2 plotposition = ImGui::GetCursorScreenPos();
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
                     ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, fltmax, plotextent);
@@ -510,22 +585,9 @@ int main(int argc, const char *argv[])
                     if (idx >= 0 && idx < int(tpm.size())) {
                         auto& window = m.groups.at(idx);
                         auto& group = m.groupedtweets.at(window);
-
-                        stringstream buffer;
-                        {
-                            time_t tb = duration_cast<seconds>(window.begin).count();
-                            struct tm* tmb = gmtime(&tb);
-                            buffer.str("");
-                            buffer << put_time(tmb, "%a %b %d %H:%M:%S %Y");
-                        }
-                        ImGui::Text("Start : %lld, %s", window.begin.count(), buffer.str().c_str());
-                        {
-                            time_t tb = duration_cast<seconds>(window.end).count();
-                            struct tm* tmb = gmtime(&tb);
-                            buffer.str("");
-                            buffer << put_time(tmb, "%a %b %d %H:%M:%S %Y");
-                        }
-                        ImGui::Text("End   : %lld, %s", window.end.count(), buffer.str().c_str());
+                        
+                        ImGui::Text("Start : %lld, %s", window.begin.count(), utctextfrom(duration_cast<seconds>(window.begin)).c_str());
+                        ImGui::Text("End   : %lld, %s", window.end.count(), utctextfrom(duration_cast<seconds>(window.end)).c_str());
                         ImGui::Text("Tweets: %ld", group->tweets.size());
                         ImGui::Text("Words : %ld", group->words.size());
 
@@ -541,7 +603,7 @@ int main(int argc, const char *argv[])
                         sort(words.begin(), words.end(), [](const WordCount& l, const WordCount& r){
                             return l.count > r.count;
                         });
-                        words.resize(10);
+                        words.resize(min(int(words.size()), 10));
 
                         for(auto& w : m.groups) {
                             auto& g = m.groupedtweets.at(w);
@@ -580,7 +642,7 @@ int main(int argc, const char *argv[])
                     auto& tweet = (**cursor);
                     if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
                         ImGui::Separator();
-                        ImGui::Text("%s (%s)", tweet["user"]["name"].get<string>().c_str() , tweet["user"]["screen_name"].get<string>().c_str() );
+                        ImGui::Text("%s (@%s)", tweet["user"]["name"].get<string>().c_str() , tweet["user"]["screen_name"].get<string>().c_str() );
                         ImGui::TextWrapped("%s", tweettext(tweet).c_str());
                     }
                 }
@@ -618,7 +680,6 @@ int main(int argc, const char *argv[])
     } else {
         string method = isFilter ? "POST" : "GET";
 
-        auto tweetthread = observe_on_new_thread();
         twitterrequest(factory, URL, method, CONS_KEY, CONS_SEC, ATOK_KEY, ATOK_SEC)
             // https://dev.twitter.com/streaming/overview/connecting
             .timeout(seconds(90), tweetthread)
