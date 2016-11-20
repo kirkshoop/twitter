@@ -15,6 +15,7 @@
 #include <regex>
 #include <deque>
 #include <map>
+#include <random>
 
 using namespace std;
 using namespace std::chrono;
@@ -30,6 +31,10 @@ using json=nlohmann::json;
 using namespace rxcurl;
 
 #include "imgui.h"
+
+#include "imgui_internal.h"
+extern const char*  GetDefaultCompressedFontDataTTFBase85();
+
 #include "imgui_impl_sdl_gl3.h"
 #include <GL/glew.h>
 #include <SDL.h>
@@ -234,8 +239,8 @@ int main(int argc, const char *argv[])
 
     // Load Fonts
     // (there is a default font, this is only if you want to change it. see extra_fonts/README.txt for more details)
-    //ImGuiIO& io = ImGui::GetIO();    
-    //io.Fonts->AddFontDefault();
+    ImGuiIO& io = ImGui::GetIO();    
+    io.Fonts->AddFontDefault();
     //io.Fonts->AddFontFromFileTTF("../../extra_fonts/Cousine-Regular.ttf", 15.0f);
     //io.Fonts->AddFontFromFileTTF("../../extra_fonts/DroidSans.ttf", 16.0f);
     //io.Fonts->AddFontFromFileTTF("../../extra_fonts/ProggyClean.ttf", 13.0f);
@@ -253,6 +258,18 @@ int main(int argc, const char *argv[])
     // io.Fonts->AddFontFromFileTTF("./EmojiOneMozilla.ttf", 16.f, &config, glyph_ranges);
     // io.Fonts->AddFontFromFileTTF("./NotoEmoji-Regular.ttf", 16.f, &config, glyph_ranges);
     // io.Fonts->AddFontFromFileTTF("~/source/rxcpp/Rx/v2/examples/twitter/NotoColorEmoji.ttf", 12.f, &config, unicode_ranges);
+
+    ImFont* cloudFont = nullptr;
+    // Load embedded ProggyClean.ttf at size 52, disable oversampling
+    {
+        ImFontConfig font_cfg;
+        font_cfg.OversampleH = font_cfg.OversampleV = 1;
+        font_cfg.PixelSnapH = true;
+        if (font_cfg.Name[0] == '\0') strcpy(font_cfg.Name, "ProggyClean.ttf, 52px");
+
+        const char* ttf_compressed_base85 = GetDefaultCompressedFontDataTTFBase85();
+        cloudFont = io.Fonts->AddFontFromMemoryCompressedBase85TTF(ttf_compressed_base85, 52.0f, &font_cfg, io.Fonts->GetGlyphRangesDefault());
+    }
 
     RXCPP_UNWIND_AUTO([&](){
         // Cleanup
@@ -504,8 +521,8 @@ int main(int argc, const char *argv[])
         start_with(Model{}) |
         publish() |
         connect_forever() |
-        // only pass model updates every 100ms
-        debounce(tweetthread, milliseconds(100)) |
+        // only pass model updates every 200ms
+        debounce(tweetthread, milliseconds(200)) |
         // deep copy model before sending to another thread
         rxo::map([](Model m){
             // deep copy to avoid ux seeing mutations
@@ -524,6 +541,24 @@ int main(int argc, const char *argv[])
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
             }
+
+            static int idx = 0;
+            static vector<WordCount> words;
+            words.clear();
+            auto collectwords = [&](){
+                if (idx >= 0 && idx < int(m.groups.size())) {
+                    auto& window = m.groups.at(idx);
+                    auto& group = m.groupedtweets.at(window);
+
+                    words.clear();
+                    transform(group->words.begin(), group->words.end(), back_inserter(words), [&](const pair<string, int>& word){
+                        return WordCount{word.first, word.second, {}};
+                    });
+                    sort(words.begin(), words.end(), [](const WordCount& l, const WordCount& r){
+                        return l.count > r.count;
+                    });
+                }
+            };
 
             ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Live Analysis")) {
@@ -577,15 +612,19 @@ int main(int argc, const char *argv[])
                     ImVec2 plotposition = ImGui::GetCursorScreenPos();
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
                     ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, fltmax, plotextent);
-                    static int idx = 0;
+                    assert(tpm.size() == m.groups.size());
                     if (ImGui::IsItemHovered()) {
                         const float t = Clamp((ImGui::GetMousePos().x - plotposition.x) / plotextent.x, 0.0f, 0.9999f);
-                        idx = (int)(t * (tpm.size() - 1));
+                        idx = (int)(t * (m.groups.size() - 1));
                     }
-                    if (idx >= 0 && idx < int(tpm.size())) {
+                    idx = min(idx, int(m.groups.size() - 1));
+
+                    collectwords();
+
+                    if (idx >= 0 && idx < int(m.groups.size())) {
                         auto& window = m.groups.at(idx);
                         auto& group = m.groupedtweets.at(window);
-                        
+
                         ImGui::Text("Start : %lld, %s", window.begin.count(), utctextfrom(duration_cast<seconds>(window.begin)).c_str());
                         ImGui::Text("End   : %lld, %s", window.end.count(), utctextfrom(duration_cast<seconds>(window.end)).c_str());
                         ImGui::Text("Tweets: %ld", group->tweets.size());
@@ -595,34 +634,80 @@ int main(int argc, const char *argv[])
 
                         ImGui::Text("Top 10 words:");
 
-                        static vector<WordCount> words;
-                        words.clear();
-                        transform(group->words.begin(), group->words.end(), back_inserter(words), [&](const pair<string, int>& word){
-                            return WordCount{word.first, word.second, {}};
-                        });
-                        sort(words.begin(), words.end(), [](const WordCount& l, const WordCount& r){
-                            return l.count > r.count;
-                        });
-                        words.resize(min(int(words.size()), 10));
+                        static vector<WordCount> top10;
+                        top10.clear();
+                        copy(words.begin(), words.begin() + min(int(words.size()), 10), back_inserter(top10));
 
+                        float maxCount = 0.0f;
                         for(auto& w : m.groups) {
                             auto& g = m.groupedtweets.at(w);
                             auto end = g->words.end();
-                            for(auto& word : words) {
+                            for(auto& word : top10) {
                                 auto wrd = g->words.find(word.word);
                                 float count = 0.0f;
                                 if (wrd != end) {
                                     count = static_cast<float>(wrd->second);
                                 }
+                                maxCount = count > maxCount ? count : maxCount;
                                 word.all.push_back(count);
                             }
                         }
 
-                        for (auto& w : words) {
+                        for (auto& w : top10) {
                             ImGui::Text("%d - %s", w.count, w.word.c_str());
                             ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
-                            ImGui::PlotLines("", &w.all[0], w.all.size(), 0, nullptr, 0.0f, fltmax, plotextent);
+                            ImGui::PlotLines("", &w.all[0], w.all.size(), 0, nullptr, 0.0f, maxCount, plotextent);
                         }
+                    }
+                }
+            }
+
+            ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
+            if (ImGui::Begin("Word Cloud")) {
+                RXCPP_UNWIND_AUTO([](){
+                    ImGui::End();
+                });
+
+                if (words.empty()) {
+                    collectwords();
+                }
+
+                ImVec2 origin = ImGui::GetCursorScreenPos();
+                auto area = ImGui::GetContentRegionAvail();
+
+                auto font = cloudFont;
+
+                static vector<ImRect> taken;
+                taken.clear();
+
+                if (!words.empty()) {
+                    mt19937 source;
+                    const auto maxCount = words.front().count;
+                    auto cursor = words.begin();
+                    auto end = words.begin() + min(int(words.size()), 50);
+                    for(;cursor != end; ++cursor) {
+                        auto place = Clamp(static_cast<float>(cursor->count)/maxCount, 0.0f, 0.9999f);
+                        auto size = Clamp(cloudFont->FontSize*place, cloudFont->FontSize/4.0f, cloudFont->FontSize);
+                        auto color = ImGui::GetStyle().Colors[ImGuiCol_Text];
+                        auto extent = font->CalcTextSizeA(size, fltmax, 0.0f, &cursor->word[0], &cursor->word[0] + cursor->word.size(), nullptr);
+                        std::uniform_int_distribution<> offsetx(0, area.x - extent.x);
+                        std::uniform_int_distribution<> offsety(0, area.y - extent.y);
+
+                        ImRect bound;
+                        int checked = -1;
+                        int trys = 10;
+                        for(;checked < int(taken.size()) && trys > 0;--trys){
+                            checked = 0;
+                            auto position = ImVec2(origin.x + offsetx(source), origin.y + offsety(source));
+                            bound = ImRect(position.x, position.y, position.x + extent.x, position.y + extent.y);
+                            for(auto& t : taken) {
+                                if (t.Overlaps(bound)) break;
+                                ++checked;
+                            }
+                        }
+
+                        ImGui::GetWindowDrawList()->AddText(font, size, bound.Min, ImColor(color), &cursor->word[0], &cursor->word[0] + cursor->word.size());
+                        taken.push_back(bound);
                     }
                 }
             }
