@@ -1,4 +1,5 @@
 # twitter
+
 rxcpp example of live twitter analysis
 
 This project was inspired by a [talk](https://blog.niallconnaughton.com/2016/10/25/ndc-sydney-talk/) by @nconnaughton - [github](https://github.com/NiallConnaughton/rx-realtime-twitter), [twitter](https://twitter.com/nconnaughton) 
@@ -11,5 +12,8 @@ CMAKE is used for the build. There are depenedcies on several libraries. (curl, 
 
 This project has only been built and tested on OS X.
 
-I uploaded a video of the app running during on election night 2016
+Here is a video of the latest code running during the seahawks vs eagales game
+[![baldwin pass to wilson](https://img.youtube.com/vi/QkvCzShHyVU/0.jpg)](https://www.youtube.com/watch?v=QkvCzShHyVU)
+
+I also uploaded a video of an older version of the app running during on election night 2016
 [![election 2016 live twitter](https://img.youtube.com/vi/ewvW4fYE4aQ/0.jpg)](https://www.youtube.com/watch?v=ewvW4fYE4aQ)
