@@ -63,6 +63,15 @@ target_compile_features(${SAMPLE_PROJECT} PUBLIC ${SHARED_COMPILE_FEATURES})
 target_include_directories(${SAMPLE_PROJECT} PUBLIC ${RXCPP_INCLUDE_DIRS} ${LIBOAUTH_INCLUDE_DIRS} ${CURL_INCLUDE_DIRS} ${OPENGL_INCLUDE_DIRS} ${SDL2_INCLUDE_DIRS} ${GLEW_INCLUDE_DIRS} ${JSON_INCLUDE_DIRS})
 target_link_libraries(${SAMPLE_PROJECT} ${CMAKE_THREAD_LIBS_INIT} ${LIBOAUTH_LIBRARY} ${CURL_LIBRARIES} ${OPENGL_LIBRARIES} ${SDL2_LIBRARIES} ${GLEW_LIBRARIES})
 
+add_custom_command(TARGET ${SAMPLE_PROJECT} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/NotoMono-Regular.ttf
+        ${CMAKE_CURRENT_BINARY_DIR}/NotoMono-Regular.ttf )
+add_custom_command(TARGET ${SAMPLE_PROJECT} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/NotoSansSymbols-Regular.ttf
+        ${CMAKE_CURRENT_BINARY_DIR}/NotoSansSymbols-Regular.ttf )
+
 # configure unit tests via CTest
 enable_testing()
 set(CTEST_CONFIGURATION_TYPE "${JOB_BUILD_CONFIGURATION}")

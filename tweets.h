@@ -79,10 +79,10 @@ auto tweet$ = line$ |
     }) | 
     observe_on(tweetthread) |
     rxo::map([](const string& line){
-        try {
+        // try {
             return make_shared<const json>(json::parse(line));
-        } catch(...) {
-            cout << line << endl;
-            throw;
-        }
+        // } catch(...) {
+        //     cerr << line << endl;
+        //     throw;
+        // }
     });

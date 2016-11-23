@@ -77,7 +77,7 @@ const unordered_set<string> ignoredWords{
 // added
 "rt", "like", "just", "tomorrow", "new", "year", "month", "day", "today", "make", "let", "want", "did", "going", "good", "really", "know", "people", "got", "life", "need", "say", "doing", "great", "right", "time", "best", "happy", "stop", "think", "world", "watch", "gonna", "remember", "way",
 "better", "team", "check", "feel", "talk", "hurry", "look", "live", "home", "game", "run", "im", "dont", "youre", "person", "house", "real", "thing", "lol", "has", "things", "thats", "fine", "ive", "youve", "yall", "didnt", "said", "come", "coming", "havent", "wont", "cant", "dont", "shouldnt",
-"hasnt", "id", "youll", "e280a6",
+"hasnt", "id", "youll", "lets", "vs", "win", "e280a6", "\xe2\x80\xa6",
 // http://xpo6.com/list-of-english-stop-words/
 "a", "about", "above", "above", "across", "after", "afterwards", "again", "against", "all", "almost", "alone", "along", "already", "also","although","always","am","among", "amongst", "amoungst", "amount",  "an", "and", "another", "any","anyhow","anyone","anything","anyway", "anywhere", "are", "around", "as",  "at", "back","be","became", "because","become","becomes", "becoming", "been", "before", "beforehand", "behind", "being", "below", "beside", "besides", "between", "beyond", "bill", "both", "bottom","but", "by", "call", "can", "cannot", "cant", "co", "con", "could", "couldnt", "cry", "de", "describe", "detail", "do", "done", "down", "due", "during", "each", "eg", "eight", "either", "eleven","else", "elsewhere", "empty", "enough", "etc", "even", "ever", "every", "everyone", "everything", "everywhere", "except", "few", "fifteen", "fify", "fill", "find", "fire", "first", "five", "for", "former", "formerly", "forty", "found", "four", "from", "front", "full", "further", "get", "give", "go", "had", "has", "hasnt", "have", "he", "hence", "her", "here", "hereafter", "hereby", "herein", "hereupon", "hers", "herself", "him", "himself", "his", "how", "however", "hundred", "ie", "if", "in", "inc", "indeed", "interest", "into", "is", "it", "its", "itself", "keep", "last", "latter", "latterly", "least", "less", "ltd", "made", "many", "may", "me", "meanwhile", "might", "mill", "mine", "more", "moreover", "most", "mostly", "move", "much", "must", "my", "myself", "name", "namely", "neither", "never", "nevertheless", "next", "nine", "no", "nobody", "none", "noone", "nor", "not", "nothing", "now", "nowhere", "of", "off", "often", "on", "once", "one", "only", "onto", "or", "other", "others", "otherwise", "our", "ours", "ourselves", "out", "over", "own","part", "per", "perhaps", "please", "put", "rather", "re", "same", "see", "seem", "seemed", "seeming", "seems", "serious", "several", "she", "should", "show", "side", "since", "sincere", "six", "sixty", "so", "some", "somehow", "someone", "something", "sometime", "sometimes", "somewhere", "still", "such", "system", "take", "ten", "than", "that", "the", "their", "them", "themselves", "then", "thence", "there", "thereafter", "thereby", "therefore", "therein", "thereupon", "these", "they", "thickv", "thin", "third", "this", "those", "though", "three", "through", "throughout", "thru", "thus", "to", "together", "too", "top", "toward", "towards", "twelve", "twenty", "two", "un", "under", "until", "up", "upon", "us", "very", "via", "was", "we", "well", "were", "what", "whatever", "when", "whence", "whenever", "where", "whereafter", "whereas", "whereby", "wherein", "whereupon", "wherever", "whether", "which", "while", "whither", "who", "whoever", "whole", "whom", "whose", "why", "will", "with", "within", "without", "would", "yet", "you", "your", "yours", "yourself", "yourselves", "the"};
 
@@ -239,37 +239,36 @@ int main(int argc, const char *argv[])
 
     // Load Fonts
     // (there is a default font, this is only if you want to change it. see extra_fonts/README.txt for more details)
-    ImGuiIO& io = ImGui::GetIO();    
-    io.Fonts->AddFontDefault();
+    //ImGuiIO& io = ImGui::GetIO();    
+    //io.Fonts->AddFontDefault();
     //io.Fonts->AddFontFromFileTTF("../../extra_fonts/Cousine-Regular.ttf", 15.0f);
     //io.Fonts->AddFontFromFileTTF("../../extra_fonts/DroidSans.ttf", 16.0f);
     //io.Fonts->AddFontFromFileTTF("../../extra_fonts/ProggyClean.ttf", 13.0f);
     //io.Fonts->AddFontFromFileTTF("../../extra_fonts/ProggyTiny.ttf", 10.0f);
     //io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
 
-    // ImGuiIO& io = ImGui::GetIO();
-    // io.Fonts->AddFontDefault();
-    // ImFontConfig config;
-    // config.MergeMode = true;
-    //io.Fonts->AddFontFromFileTTF("./NotoEmoji-Regular.ttf", 12.f, &config);
-// U+1F1FF U+1F1FC
-// U+1F1E6 U+1F1E8
-    // const ImWchar glyph_ranges[] = { 0x0100, 0xFFFF, 0 };
-    // io.Fonts->AddFontFromFileTTF("./EmojiOneMozilla.ttf", 16.f, &config, glyph_ranges);
-    // io.Fonts->AddFontFromFileTTF("./NotoEmoji-Regular.ttf", 16.f, &config, glyph_ranges);
-    // io.Fonts->AddFontFromFileTTF("~/source/rxcpp/Rx/v2/examples/twitter/NotoColorEmoji.ttf", 12.f, &config, unicode_ranges);
+    ImGuiIO& io = ImGui::GetIO();
 
-    ImFont* cloudFont = nullptr;
-    // Load embedded ProggyClean.ttf at size 52, disable oversampling
-    {
-        ImFontConfig font_cfg;
-        font_cfg.OversampleH = font_cfg.OversampleV = 1;
-        font_cfg.PixelSnapH = true;
-        if (font_cfg.Name[0] == '\0') strcpy(font_cfg.Name, "ProggyClean.ttf, 52px");
+    static const ImWchar noto[] = { 
+        0x0020, 0x0513,
+        0x1e00, 0x1f4d,
+        0x2000, 0x25ca,
+        0xfb01, 0xfb04,
+        0xfeff, 0xfffd, 
+        0 };
+    io.Fonts->AddFontFromFileTTF("./NotoMono-Regular.ttf", 13.0f, nullptr, noto);
 
-        const char* ttf_compressed_base85 = GetDefaultCompressedFontDataTTFBase85();
-        cloudFont = io.Fonts->AddFontFromMemoryCompressedBase85TTF(ttf_compressed_base85, 52.0f, &font_cfg, io.Fonts->GetGlyphRangesDefault());
-    }
+    ImFontConfig config;
+    config.MergeMode = true;
+    static const ImWchar symbols[] = { 
+        0x20a0, 0x2e3b, 
+        0x3008, 0x3009, 
+        0x4dc0, 0x4dff, 
+        0xa700, 0xa71f, 
+        0 };
+    io.Fonts->AddFontFromFileTTF("./NotoSansSymbols-Regular.ttf", 13.0f, &config, symbols);
+
+    io.Fonts->Build();
 
     RXCPP_UNWIND_AUTO([&](){
         // Cleanup
@@ -374,20 +373,10 @@ int main(int argc, const char *argv[])
 
                     // exclude entities, urls and some punct from this words list
                     auto text = tweettext(tweet);
-                    regex ignore(R"((&[\w]+;)|((http|ftp|https)://[\w-]+(\.[\w-]+)+([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?)|['\""])"); //"
+                    regex ignore(R"(([\w]*\xe2\x80\xa6)|(&[\w]+;)|((http|ftp|https)://[\w-]+(\.[\w-]+)+([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?)|['\""])"); //"
                     auto words = split(regex_replace(text, ignore, ""), R"([\(\)\[\]\s,.-:;&?!]+)", Split::RemoveDelimiter);
                     for (auto& word: words) {
-                        auto w = tolower(word);
-                        word.clear();
-                        for(auto& c : w){
-                            if(c < 0) {
-                                stringstream hexed;
-                                hexed << hex << nouppercase << setfill('0') << setw(2) << static_cast<unsigned int>(static_cast<unsigned char>(c));
-                                word += hexed.str();
-                            } else {
-                                word.push_back(c);
-                            }
-                        }
+                        word = tolower(word);
                     }
                     words.erase(std::remove_if(words.begin(), words.end(), [=](const string& w){
                         return !(w.size() > 1 && ignoredWords.find(w) == ignoredWords.end() && URL.find(w) == string::npos);
@@ -540,6 +529,7 @@ int main(int argc, const char *argv[])
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
+                terminate();
             }
 
             static int idx = 0;
@@ -567,10 +557,10 @@ int main(int argc, const char *argv[])
                 });
 
                 ImGui::TextWrapped("url: %s", URL.c_str());
-                ImGui::Text("Total Tweets: %d, Now: %s", m.total, utctextfrom().c_str());
+                ImGui::Text("Now: %s, Total Tweets: %d", utctextfrom().c_str(), m.total);
 
                 // by window
-                if (ImGui::CollapsingHeader("Tweets Per Minute (windowed)"))
+                if (ImGui::CollapsingHeader("Tweets Per Minute (windowed by arrival time)"))
                 {
                     static vector<float> tpm;
                     tpm.clear();
@@ -585,7 +575,7 @@ int main(int argc, const char *argv[])
                 }
 
                 // by group
-                if (ImGui::CollapsingHeader("Tweets Per Minute (grouped)"))
+                if (ImGui::CollapsingHeader("Tweets Per Minute (grouped by timestamp_ms)", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
                 {
                     static vector<float> tpm;
                     tpm.clear();
@@ -625,14 +615,12 @@ int main(int argc, const char *argv[])
                         auto& window = m.groups.at(idx);
                         auto& group = m.groupedtweets.at(window);
 
-                        ImGui::Text("Start : %lld, %s", window.begin.count(), utctextfrom(duration_cast<seconds>(window.begin)).c_str());
-                        ImGui::Text("End   : %lld, %s", window.end.count(), utctextfrom(duration_cast<seconds>(window.end)).c_str());
-                        ImGui::Text("Tweets: %ld", group->tweets.size());
-                        ImGui::Text("Words : %ld", group->words.size());
-
                         ImGui::Separator();
 
-                        ImGui::Text("Top 10 words:");
+                        ImGui::Text("%s -> %s", utctextfrom(duration_cast<seconds>(window.begin)).c_str(), utctextfrom(duration_cast<seconds>(window.end)).c_str());
+
+                        ImGui::Text("Tweets: %ld", group->tweets.size());
+                        ImGui::Text("Words : %ld", group->words.size());
 
                         static vector<WordCount> top10;
                         top10.clear();
@@ -672,10 +660,12 @@ int main(int argc, const char *argv[])
                     collectwords();
                 }
 
-                ImVec2 origin = ImGui::GetCursorScreenPos();
+                auto origin = ImGui::GetCursorScreenPos();
                 auto area = ImGui::GetContentRegionAvail();
+                auto clip = ImVec4(origin.x, origin.y, origin.x + area.x, origin.y + area.y);
 
-                auto font = cloudFont;
+                auto font = ImGui::GetFont();
+                auto scale = 4.0f;
 
                 static vector<ImRect> taken;
                 taken.clear();
@@ -684,14 +674,15 @@ int main(int argc, const char *argv[])
                     mt19937 source;
                     const auto maxCount = words.front().count;
                     auto cursor = words.begin();
-                    auto end = words.begin() + min(int(words.size()), 50);
+                    auto end = words.end();
                     for(;cursor != end; ++cursor) {
                         auto place = Clamp(static_cast<float>(cursor->count)/maxCount, 0.0f, 0.9999f);
-                        auto size = Clamp(cloudFont->FontSize*place, cloudFont->FontSize/4.0f, cloudFont->FontSize);
                         auto color = ImGui::GetStyle().Colors[ImGuiCol_Text];
+                        auto size = Clamp(font->FontSize*scale*place, font->FontSize*scale*0.25f, font->FontSize*scale);
                         auto extent = font->CalcTextSizeA(size, fltmax, 0.0f, &cursor->word[0], &cursor->word[0] + cursor->word.size(), nullptr);
-                        std::uniform_int_distribution<> offsetx(0, area.x - extent.x);
-                        std::uniform_int_distribution<> offsety(0, area.y - extent.y);
+
+                        auto offsetx = uniform_int_distribution<>(0, area.x - extent.x);
+                        auto offsety = uniform_int_distribution<>(0, area.y - extent.y);
 
                         ImRect bound;
                         int checked = -1;
@@ -706,7 +697,12 @@ int main(int argc, const char *argv[])
                             }
                         }
 
-                        ImGui::GetWindowDrawList()->AddText(font, size, bound.Min, ImColor(color), &cursor->word[0], &cursor->word[0] + cursor->word.size());
+                        if (checked < int(taken.size()) && trys == 0) {
+                            //word did not fit
+                            break;
+                        }
+
+                        ImGui::GetWindowDrawList()->AddText(font, size, bound.Min, ImColor(color), &cursor->word[0], &cursor->word[0] + cursor->word.size(), 0.0f, &clip);
                         taken.push_back(bound);
                     }
                 }
@@ -796,6 +792,7 @@ int main(int argc, const char *argv[])
                             cerr << "invalid request - exit" << endl;
                             return observable<>::error<string>(ep, tweetthread);
                         }
+                        cerr << "http status (" << ex.httpStatus() << ") - waiting to retry.." << endl;
                         return observable<>::timer(seconds(5), tweetthread).map([](long){return string{};}).ignore_elements();
                     }
                 }
