@@ -20,11 +20,12 @@ auto isEndOfTweet = [](const string& s){
 
 enum class Split {
     KeepDelimiter,
-    RemoveDelimiter
+    RemoveDelimiter,
+    OnlyDelimiter
 };
 auto split = [](string s, string d, Split m = Split::KeepDelimiter){
     regex delim(d);
-    cregex_token_iterator cursor(&s[0], &s[0] + s.size(), delim, m == Split::KeepDelimiter ? initializer_list<int>({-1, 0}) : initializer_list<int>({-1}));
+    cregex_token_iterator cursor(&s[0], &s[0] + s.size(), delim, m == Split::KeepDelimiter ? initializer_list<int>({-1, 0}) : (m == Split::RemoveDelimiter ? initializer_list<int>({-1}) : initializer_list<int>({0})));
     cregex_token_iterator end;
     vector<string> splits(cursor, end);
     return splits;
