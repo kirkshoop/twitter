@@ -373,8 +373,8 @@ int main(int argc, const char *argv[])
 
                     // exclude entities, urls and some punct from this words list
                     auto text = tweettext(tweet);
-                    regex ignore(R"(([\w]*\xe2\x80\xa6)|(&[\w]+;)|((http|ftp|https)://[\w-]+(\.[\w-]+)+([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?)|['\""])"); //"
-                    auto words = split(regex_replace(text, ignore, ""), R"([\(\)\[\]\s,.-:;&?!]+)", Split::RemoveDelimiter);
+                    regex ignore(R"((\xe2\x80\xa6)|(&[\w]+;)|((http|ftp|https)://[\w-]+(.[\w-]+)+([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?)|['\""])"); //"
+                    auto words = split(regex_replace(text, ignore, ""), R"(([\s][:punct:]\s)|([.][\s])|[\(\)\[\]\s,:;&?!]+)", Split::RemoveDelimiter);
                     for (auto& word: words) {
                         word = tolower(word);
                     }
