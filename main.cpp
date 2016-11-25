@@ -371,23 +371,26 @@ int main(int argc, const char *argv[])
                 rxo::map([=](const shared_ptr<const json>& tw){
                     auto& tweet = *tw;
 
-                    // exclude entities, urls and some punct from this words list
                     auto text = tweettext(tweet);
 
                     static string delimiters = R"(\s+)";
                     auto words = split(text, delimiters, Split::RemoveDelimiter);
 
-                    static regex ignore(R"((\xe2\x80\xa6)|(&[\w]+;))|((http|ftp|https)://[\w-]+(.[\w-]+)+([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?))");
-                    static regex explitives(R"(\x66\x75\x63\x6B|\x73\x68\x69\x74|\x64\x61\x6D\x6E)");
+                    // exclude entities, urls and some punct from this words list
+
+                    static regex ignore(R"((\xe2\x80\xa6)|(&[\w]+;)|((http|ftp|https)://[\w-]+(.[\w-]+)+([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?))");
+                    static regex expletives(R"(\x66\x75\x63\x6B|\x73\x68\x69\x74|\x64\x61\x6D\x6E)");
 
                     for (auto& word: words) {
                         while (!word.empty() && word.front() == '.') word.erase(word.begin());
                         while (!word.empty() && word.back() == ':') word.resize(word.size() - 1);
-                        if (!word.empty() && (word.front() == '@' || word.front() == '#')) continue;
+                        if (!word.empty() && word.front() == '@') continue;
                         word = regex_replace(tolower(word), ignore, "");
-                        while (!word.empty() && ispunct(word.front())) word.erase(word.begin());
-                        while (!word.empty() && ispunct(word.back())) word.resize(word.size() - 1);
-                        word = regex_replace(word, explitives, "<explitive>");
+                        if (!word.empty() && word.front() != '#') {
+                            while (!word.empty() && ispunct(word.front())) word.erase(word.begin());
+                            while (!word.empty() && ispunct(word.back())) word.resize(word.size() - 1);
+                        }
+                        word = regex_replace(word, expletives, "<expletive>");
                     }
 
                     words.erase(std::remove_if(words.begin(), words.end(), [=](const string& w){
