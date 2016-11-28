@@ -421,9 +421,9 @@ int main(int argc, const char *argv[])
         ref_count() |
         as_dynamic();
 
-    vector<observable<Reducer>> reducers;
+    // ==== Model
 
-    // ==== Dump
+    vector<observable<Reducer>> reducers;
 
     if (dumpjson)
     {
@@ -452,8 +452,6 @@ int main(int argc, const char *argv[])
             rxo::map([=](const shared_ptr<const json>&){return noop;}) |
             start_with(noop));
     }
-
-    // ==== Model
 
     // update groups on time interval so that minutes with no tweets are recorded.
     reducers.push_back(
@@ -631,25 +629,28 @@ int main(int argc, const char *argv[])
             }
         }) | 
         start_with(Model{}) |
-        publish() |
-        connect_forever() |
-        // only pass model updates every 200ms
+        // only pass model updates to mainthread every 200ms
         debounce(tweetthread, milliseconds(200)) |
-        // deep copy model before sending to another thread
+        // deep copy model before sending to mainthread
         rxo::map([](Model m){
-            // deep copy to avoid ux seeing mutations
+            // deep copy to prevent ux seeing mutations
             for (auto& tg: m.groupedtweets) {
                 tg.second = make_shared<TweetGroup>(*tg.second);
             }
             return m;
         }) |
         // give the updated model to the UX
-        observe_on(mainthread);
+        observe_on(mainthread) |
+        publish() |
+        ref_count();
 
     // ==== View
 
-    // render model
-    frame$ |
+    vector<observable<Model>> renderers;
+
+    // render analisys
+    renderers.push_back(
+        frame$ |
         with_latest_from([=](int, const Model& m){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
@@ -833,6 +834,25 @@ int main(int argc, const char *argv[])
                 }
             }
 
+            return m;
+        }, model$) |
+        on_error_resume_next([](std::exception_ptr ep){
+            cerr << rxu::what(ep) << endl;
+            return observable<>::empty<Model>();
+        }) |
+        repeat(0) |
+        as_dynamic());
+
+    // render recent
+    renderers.push_back(
+        frame$ |
+        with_latest_from([=](int, const Model& m){
+            auto renderthreadid = this_thread::get_id();
+            if (mainthreadid != renderthreadid) {
+                cerr << "render on wrong thread!" << endl;
+                terminate();
+            }
+
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Recent Tweets")) {
                 RXCPP_UNWIND_AUTO([](){
@@ -860,9 +880,13 @@ int main(int argc, const char *argv[])
             cerr << rxu::what(ep) << endl;
             return observable<>::empty<Model>();
         }) |
-        repeat(numeric_limits<int>::max()) |
-        subscribe<Model>([](const Model&){});
+        repeat(0) |
+        as_dynamic());
 
+    // subscribe to everything!
+    iterate(renderers) |
+        merge() |
+        subscribe<Model>([](const Model&){});
 
     // ==== Main
 
