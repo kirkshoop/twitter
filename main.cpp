@@ -287,9 +287,10 @@ int main(int argc, const char *argv[])
     auto selector = string{tolower(argc > 1 ? argv[1] : "")};
 
     const bool playback = argc == 3 && selector == "playback";
-    const bool dumpjson = argc == 7 && selector == "dumpjson";
-    const bool dumptext = argc == 7 && selector == "dumptext";
     const bool gui = argc == 6;
+
+    bool dumpjson = argc == 7 && selector == "dumpjson";
+    bool dumptext = argc == 7 && selector == "dumptext";
 
     if (!playback &&
         !dumptext &&
@@ -457,33 +458,33 @@ int main(int argc, const char *argv[])
 
     vector<observable<Reducer>> reducers;
 
-    if (dumpjson)
-    {
-        reducers.push_back(
-            t$ |
-            tap([=](const shared_ptr<const json>& tw){
-                auto& tweet = *tw;
-                cout << tweet << "\r\n";
-            }) |
-            rxo::map([=](const shared_ptr<const json>&){return noop;}) |
-            start_with(noop));
-    }
+    reducers.push_back(
+        t$ |
+        filter([&](const shared_ptr<const json>&){
+            return dumpjson;
+        }) |
+        tap([=](const shared_ptr<const json>& tw){
+            auto& tweet = *tw;
+            cout << tweet << "\r\n";
+        }) |
+        rxo::map([=](const shared_ptr<const json>&){return noop;}) |
+        start_with(noop));
 
-    if (dumptext)
-    {
-        reducers.push_back(
-            t$ |
-            tap([=](const shared_ptr<const json>& tw){
-                auto& tweet = *tw;
-                if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
-                    cout << "------------------------------------" << endl;
-                    cout << tweet["user"]["name"].get<string>() << " (" << tweet["user"]["screen_name"].get<string>() << ")" << endl;
-                    cout << tweettext(tweet) << endl;
-                }
-            }) |
-            rxo::map([=](const shared_ptr<const json>&){return noop;}) |
-            start_with(noop));
-    }
+    reducers.push_back(
+        t$ |
+        filter([&](const shared_ptr<const json>&){
+            return dumptext;
+        }) |
+        tap([=](const shared_ptr<const json>& tw){
+            auto& tweet = *tw;
+            if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
+                cout << "------------------------------------" << endl;
+                cout << tweet["user"]["name"].get<string>() << " (" << tweet["user"]["screen_name"].get<string>() << ")" << endl;
+                cout << tweettext(tweet) << endl;
+            }
+        }) |
+        rxo::map([=](const shared_ptr<const json>&){return noop;}) |
+        start_with(noop));
 
     // update groups on time interval so that minutes with no tweets are recorded.
     reducers.push_back(
@@ -766,6 +767,9 @@ int main(int argc, const char *argv[])
                         idx = (int)(t * (m.groups.size() - 1));
                     }
                     idx = min(idx, int(m.groups.size() - 1));
+
+                    ImGui::PushItemWidth(ImGui::GetContentRegionAvailWidth());
+                    ImGui::SliderInt("", &idx, 0, m.groups.size() - 1);
                 }
             }
 
@@ -943,6 +947,39 @@ int main(int argc, const char *argv[])
                         ImGui::TextWrapped("%s", tweettext(tweet).c_str());
                     }
                 }
+            }
+
+            return m;
+        }, model$) |
+        on_error_resume_next([](std::exception_ptr ep){
+            cerr << rxu::what(ep) << endl;
+            return observable<>::empty<Model>();
+        }) |
+        repeat(0) |
+        as_dynamic());
+
+    // render controls
+    renderers.push_back(
+        frame$ |
+        with_latest_from([=, &dumptext, &dumpjson](int, const Model& m){
+            auto renderthreadid = this_thread::get_id();
+            if (mainthreadid != renderthreadid) {
+                cerr << "render on wrong thread!" << endl;
+                terminate();
+            }
+
+            ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
+            if (ImGui::Begin("Controls")) {
+                RXCPP_UNWIND_AUTO([](){
+                    ImGui::End();
+                });
+
+                static int dumpmode = dumptext ? 1 : dumpjson ? 2 : 0;
+                ImGui::RadioButton("None", &dumpmode, 0); ImGui::SameLine();
+                ImGui::RadioButton("Text", &dumpmode, 1); ImGui::SameLine();
+                ImGui::RadioButton("JSon", &dumpmode, 2);
+                dumptext = dumpmode == 1;
+                dumpjson = dumpmode == 2;
             }
 
             return m;
