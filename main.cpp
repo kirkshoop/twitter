@@ -766,50 +766,57 @@ int main(int argc, const char *argv[])
                         idx = (int)(t * (m.groups.size() - 1));
                     }
                     idx = min(idx, int(m.groups.size() - 1));
+                }
+            }
 
+            ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
+            if (ImGui::Begin("Top Words from group")) {
+                RXCPP_UNWIND_AUTO([](){
+                    ImGui::End();
+                });
+
+                if (words.empty()) {
                     collectwords();
+                }
 
-                    if (idx >= 0 && idx < int(m.groups.size())) {
-                        auto& window = m.groups.at(idx);
-                        auto& group = m.groupedtweets.at(window);
+                if (idx >= 0 && idx < int(m.groups.size())) {
+                    auto& window = m.groups.at(idx);
+                    auto& group = m.groupedtweets.at(window);
 
-                        ImGui::Separator();
+                    ImGui::Text("%s -> %s", utctextfrom(duration_cast<seconds>(window.begin)).c_str(), utctextfrom(duration_cast<seconds>(window.end)).c_str());
 
-                        ImGui::Text("%s -> %s", utctextfrom(duration_cast<seconds>(window.begin)).c_str(), utctextfrom(duration_cast<seconds>(window.end)).c_str());
+                    ImGui::Text("Tweets: %ld", group->tweets.size());
+                    ImGui::Text("Words : %ld", group->words.size());
 
-                        ImGui::Text("Tweets: %ld", group->tweets.size());
-                        ImGui::Text("Words : %ld", group->words.size());
+                    static vector<WordCount> top10;
+                    top10.clear();
+                    copy(words.begin(), words.begin() + min(int(words.size()), 10), back_inserter(top10));
 
-                        static vector<WordCount> top10;
-                        top10.clear();
-                        copy(words.begin(), words.begin() + min(int(words.size()), 10), back_inserter(top10));
-
-                        float maxCount = 0.0f;
-                        for(auto& w : m.groups) {
-                            auto& g = m.groupedtweets.at(w);
-                            auto end = g->words.end();
-                            for(auto& word : top10) {
-                                auto wrd = g->words.find(word.word);
-                                float count = 0.0f;
-                                if (wrd != end) {
-                                    count = static_cast<float>(wrd->second);
-                                }
-                                maxCount = count > maxCount ? count : maxCount;
-                                word.all.push_back(count);
+                    float maxCount = 0.0f;
+                    for(auto& w : m.groups) {
+                        auto& g = m.groupedtweets.at(w);
+                        auto end = g->words.end();
+                        for(auto& word : top10) {
+                            auto wrd = g->words.find(word.word);
+                            float count = 0.0f;
+                            if (wrd != end) {
+                                count = static_cast<float>(wrd->second);
                             }
+                            maxCount = count > maxCount ? count : maxCount;
+                            word.all.push_back(count);
                         }
+                    }
 
-                        for (auto& w : top10) {
-                            ImGui::Text("%d - %s", w.count, w.word.c_str());
-                            ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
-                            ImGui::PlotLines("", &w.all[0], w.all.size(), 0, nullptr, 0.0f, maxCount, plotextent);
-                        }
+                    for (auto& w : top10) {
+                        ImGui::Text("%d - %s", w.count, w.word.c_str());
+                        ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
+                        ImGui::PlotLines("", &w.all[0], w.all.size(), 0, nullptr, 0.0f, maxCount, plotextent);
                     }
                 }
             }
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
-            if (ImGui::Begin("Word Cloud")) {
+            if (ImGui::Begin("Word Cloud from group")) {
                 RXCPP_UNWIND_AUTO([](){
                     ImGui::End();
                 });
@@ -862,6 +869,38 @@ int main(int argc, const char *argv[])
 
                         ImGui::GetWindowDrawList()->AddText(font, size, bound.Min, ImColor(color), &cursor->word[0], &cursor->word[0] + cursor->word.size(), 0.0f, &clip);
                         taken.push_back(bound);
+                    }
+                }
+            }
+
+            ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
+            if (ImGui::Begin("Tweets from group")) {
+                RXCPP_UNWIND_AUTO([](){
+                    ImGui::End();
+                });
+
+                static ImGuiTextFilter filter;
+
+                filter.Draw();
+
+                if (idx >= 0 && idx < int(m.groups.size())) {
+                    auto& window = m.groups.at(idx);
+                    auto& group = m.groupedtweets.at(window);
+
+                    auto cursor = group->tweets.rbegin();
+                    auto end = group->tweets.rend();
+                    for(;cursor != end; ++cursor) {
+                        auto& tweet = **cursor;
+                        if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
+                            auto name = tweet["user"]["name"].get<string>();
+                            auto screenName = tweet["user"]["screen_name"].get<string>();
+                            auto text = tweettext(tweet);
+                            if (filter.PassFilter(name.c_str()) || filter.PassFilter(screenName.c_str()) || filter.PassFilter(text.c_str())) {
+                                ImGui::Separator();
+                                ImGui::Text("%s (@%s)", name.c_str() , screenName.c_str() );
+                                ImGui::TextWrapped("%s", text.c_str());
+                            }
+                        }
                     }
                 }
             }
