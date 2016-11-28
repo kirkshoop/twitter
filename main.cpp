@@ -131,6 +131,48 @@ inline string utctextfrom(system_clock::time_point time = system_clock::now()) {
     return utctextfrom(time_point_cast<seconds>(time).time_since_epoch());
 }
 
+inline function<observable<string>(observable<long>)> stringandignore() {
+    return [](observable<long> s){
+        return s.map([](long){return string{};}).ignore_elements();
+    };
+}
+
+enum class errorcodeclass {
+    Invalid,
+    TcpRetry,
+    ErrorRetry,
+    StatusRetry,
+    RateLimited
+};
+
+inline errorcodeclass errorclassfrom(const http_exception& ex) {
+    switch(ex.code()) {
+        case CURLE_COULDNT_RESOLVE_HOST:
+        case CURLE_COULDNT_CONNECT:
+        case CURLE_OPERATION_TIMEDOUT:
+        case CURLE_BAD_CONTENT_ENCODING:
+        case CURLE_REMOTE_FILE_NOT_FOUND:
+            return errorcodeclass::ErrorRetry;
+        case CURLE_GOT_NOTHING:
+        case CURLE_PARTIAL_FILE:
+        case CURLE_SEND_ERROR:
+        case CURLE_RECV_ERROR:
+            return errorcodeclass::TcpRetry;
+        default:
+            if (ex.code() == CURLE_HTTP_RETURNED_ERROR || ex.httpStatus() > 200) {
+                if (ex.httpStatus() == 420) {
+                    return errorcodeclass::RateLimited;
+                } else if (ex.httpStatus() == 404 ||
+                    ex.httpStatus() == 406 ||
+                    ex.httpStatus() == 413 ||
+                    ex.httpStatus() == 416) {
+                    return errorcodeclass::Invalid;
+                }
+            }
+    };
+    return errorcodeclass::StatusRetry;
+}
+
 auto twitterrequest = [](observe_on_one_worker tweetthread, ::rxcurl::rxcurl factory, string URL, string method, string CONS_KEY, string CONS_SEC, string ATOK_KEY, string ATOK_SEC){
 
     return observable<>::defer([=](){
@@ -162,33 +204,23 @@ auto twitterrequest = [](observe_on_one_worker tweetthread, ::rxcurl::rxcurl fac
         try {rethrow_exception(ep);}
         catch (const http_exception& ex) {
             cerr << ex.what() << endl;
-            if (ex.code() == CURLE_COULDNT_RESOLVE_HOST ||
-                ex.code() == CURLE_COULDNT_CONNECT ||
-                ex.code() == CURLE_OPERATION_TIMEDOUT ||
-                ex.code() == CURLE_BAD_CONTENT_ENCODING ||
-                ex.code() == CURLE_REMOTE_FILE_NOT_FOUND) {
-                cerr << "error - waiting to retry.." << endl;
-                return observable<>::timer(seconds(5), tweetthread).map([](long){return string{};}).ignore_elements();
-            } else if (ex.code() == CURLE_GOT_NOTHING ||
-                ex.code() == CURLE_PARTIAL_FILE ||
-                ex.code() == CURLE_SEND_ERROR ||
-                ex.code() == CURLE_RECV_ERROR) {
-                cerr << "reconnecting after TCP error" << endl;
-                return observable<>::empty<string>();
-            } else if (ex.code() == CURLE_HTTP_RETURNED_ERROR || ex.httpStatus() > 200) {
-                if (ex.httpStatus() == 420) {
+            switch(errorclassfrom(ex)) {
+                case errorcodeclass::TcpRetry:
+                    cerr << "reconnecting after TCP error" << endl;
+                    return observable<>::empty<string>();
+                case errorcodeclass::ErrorRetry:
+                    cerr << "error code (" << ex.code() << ") - ";
+                case errorcodeclass::StatusRetry:
+                    cerr << "http status (" << ex.httpStatus() << ") - waiting to retry.." << endl;
+                    return observable<>::timer(seconds(5), tweetthread) | stringandignore();
+                case errorcodeclass::RateLimited:
                     cerr << "rate limited - waiting to retry.." << endl;
-                    return observable<>::timer(minutes(1), tweetthread).map([](long){return string{};}).ignore_elements();
-                } else if (ex.httpStatus() == 404 ||
-                    ex.httpStatus() == 406 ||
-                    ex.httpStatus() == 413 ||
-                    ex.httpStatus() == 416) {
+                    return observable<>::timer(minutes(1), tweetthread) | stringandignore();
+                case errorcodeclass::Invalid:
                     cerr << "invalid request - exit" << endl;
+                default:
                     return observable<>::error<string>(ep, tweetthread);
-                }
-                cerr << "http status (" << ex.httpStatus() << ") - waiting to retry.." << endl;
-                return observable<>::timer(seconds(5), tweetthread).map([](long){return string{};}).ignore_elements();
-            }
+            };
         }
         catch (const timeout_error& ex) {
             cerr << "reconnecting after timeout" << endl;
@@ -200,7 +232,7 @@ auto twitterrequest = [](observe_on_one_worker tweetthread, ::rxcurl::rxcurl fac
         }
         return observable<>::error<string>(ep, tweetthread);
     }) |
-    repeat(std::numeric_limits<int>::max());
+    repeat(0);
 };
 
 inline void updategroups(
