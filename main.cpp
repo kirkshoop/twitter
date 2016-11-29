@@ -137,6 +137,15 @@ inline function<observable<string>(observable<long>)> stringandignore() {
     };
 }
 
+inline function<observable<shared_ptr<const json>>(observable<shared_ptr<const json>>)> onlytweets() {
+    return [](observable<shared_ptr<const json>> s){
+        return s | filter([](const shared_ptr<const json>& tw){
+            auto& tweet = *tw;
+            return !!tweet.count("timestamp_ms");
+        });
+    };
+}
+
 enum class errorcodeclass {
     Invalid,
     TcpRetry,
@@ -280,6 +289,12 @@ inline string tweettext(const json& tweet) {
     return {};
 }
 
+inline milliseconds timestamp_ms(const shared_ptr<const json>& tw) {
+    auto& tweet = *tw;
+    auto t = milliseconds(stoll(tweet["timestamp_ms"].get<string>()));
+    return t;
+}
+
 int main(int argc, const char *argv[])
 {
     // ==== Parse args
@@ -419,23 +434,44 @@ int main(int argc, const char *argv[])
 
     // send tweets
     if (playback) {
-        cout << argv[1 + argoffset] << endl;
+        auto filepath = argv[1 + argoffset];
+        cerr << filepath << endl;
 
-        auto filethread = observe_on_new_thread();
         chunk$ = observable<>::create<string>([=](subscriber<string> out){
-                std::ifstream infile(argv[1 + argoffset]);
-                std::string line;
-                while (std::getline(infile, line))
-                {
-                    if (line[0] == '{') {
-                        line+="\r\n";
-                        assert(isEndOfTweet(line));
-                        out.on_next(line);
+
+                auto filethread = observe_on_new_thread();
+
+                auto values = make_tuple(ifstream{filepath}, string{});
+                auto state = make_shared<decltype(values)>(move(values));
+
+                // creates a worker whose lifetime is the same as this subscription
+                auto coordinator = filethread.create_coordinator(out.get_subscription());
+
+                auto controller = coordinator.get_worker();
+
+                auto producer = [out, state](const rxsc::schedulable& self) {
+
+                    if (!out.is_subscribed()) {
+                        // terminate loop
+                        return;
                     }
-                }
-                out.on_completed();
-            })
-            .subscribe_on(filethread);
+
+                    if (getline(get<0>(*state), get<1>(*state)))
+                    {
+                        get<1>(*state)+="\r\n";
+                        out.on_next(get<1>(*state));
+                    } else {
+                        out.on_completed();
+                        return;
+                    }
+
+                    // tail recurse this same action to continue loop
+                    self();
+                };
+
+                //controller.schedule_periodically(controller.now(), milliseconds(100), coordinator.act(producer));
+                controller.schedule(coordinator.act(producer));
+            });
     } else {
         string method = isFilter ? "POST" : "GET";
 
@@ -449,7 +485,7 @@ int main(int argc, const char *argv[])
             cerr << rxu::what(ep) << endl;
             return observable<>::empty<shared_ptr<const json>>();
         }) |
-        repeat(std::numeric_limits<int>::max()) |
+        repeat(0) |
         publish() |
         ref_count() |
         as_dynamic();
@@ -472,6 +508,7 @@ int main(int argc, const char *argv[])
 
     reducers.push_back(
         t$ |
+        onlytweets() |
         filter([&](const shared_ptr<const json>&){
             return dumptext;
         }) |
@@ -486,34 +523,31 @@ int main(int argc, const char *argv[])
         rxo::map([=](const shared_ptr<const json>&){return noop;}) |
         start_with(noop));
 
-    // update groups on time interval so that minutes with no tweets are recorded.
-    reducers.push_back(
-        observable<>::interval(every, poolthread) |
-        rxo::map([=](long){
-            return Reducer([=](Model& m){
-                auto rangebegin = time_point_cast<milliseconds>(system_clock::now()).time_since_epoch();
-                updategroups(m, rangebegin);
-                return std::move(m);
-            });
-        }) |
-        on_error_resume_next([](std::exception_ptr ep){
-            cerr << rxu::what(ep) << endl;
-            return observable<>::empty<Reducer>();
-        }) |
-        start_with(noop) |
-        as_dynamic());
+    if (!playback) {
+        // update groups on time interval so that minutes with no tweets are recorded.
+        reducers.push_back(
+            observable<>::interval(every, poolthread) |
+            rxo::map([=](long){
+                return Reducer([=](Model& m){
+                    auto rangebegin = time_point_cast<milliseconds>(system_clock::now()).time_since_epoch();
+                    updategroups(m, rangebegin);
+                    return std::move(m);
+                });
+            }) |
+            on_error_resume_next([](std::exception_ptr ep){
+                cerr << rxu::what(ep) << endl;
+                return observable<>::empty<Reducer>();
+            }) |
+            start_with(noop) |
+            as_dynamic());
+    }
 
     // group tweets, that arrive, by the timestamp_ms value
     reducers.push_back(
         t$ |
-        filter([](const shared_ptr<const json>& tw){
-            auto& tweet = *tw;
-            return !!tweet.count("timestamp_ms");
-        }) |
+        onlytweets() |
         group_by([](const shared_ptr<const json>& tw) {
-            auto& tweet = *tw;
-            auto t = milliseconds(stoll(tweet["timestamp_ms"].get<string>()));
-            auto m = duration_cast<minutes>(t);
+            auto m = duration_cast<minutes>(timestamp_ms(tw));
             return m;
         }) |
         rxo::map([=](grouped_observable<minutes, shared_ptr<const json>> g){
@@ -527,7 +561,7 @@ int main(int argc, const char *argv[])
                     auto words = splitwords(URL, text);
 
                     return Reducer([=](Model& m){
-                        auto t = milliseconds(stoll(tweet["timestamp_ms"].get<string>()));
+                        auto t = timestamp_ms(tw);
 
                         updategroups(m, t, tw, words);
 
@@ -548,10 +582,7 @@ int main(int argc, const char *argv[])
     // window tweets by the time that they arrive
     reducers.push_back(
         t$ |
-        filter([](const shared_ptr<const json>& tw){
-            auto& tweet = *tw;
-            return !!tweet.count("timestamp_ms");
-        }) |
+        onlytweets() |
         window_with_time(length, every, poolthread) |
         rxo::map([](observable<shared_ptr<const json>> source){
             auto rangebegin = time_point_cast<seconds>(system_clock::now()).time_since_epoch();
@@ -597,15 +628,12 @@ int main(int argc, const char *argv[])
     // keep recent tweets
     reducers.push_back(
         t$ |
-        filter([](const shared_ptr<const json>& tw){
-            auto& tweet = *tw;
-            return !!tweet.count("timestamp_ms");
-        }) |
+        onlytweets() |
         buffer_with_time(milliseconds(1000), poolthread) |
         rxo::map([=](const vector<shared_ptr<const json>>& tws){
             return Reducer([=](Model& m){
                 m.tail.insert(m.tail.end(), tws.begin(), tws.end());
-                while(m.tail.size() > 100) {
+                while(m.tail.size() > 300) {
                     m.tail.pop_front();
                 }
                 return std::move(m);
@@ -621,10 +649,7 @@ int main(int argc, const char *argv[])
     // record total number of tweets that have arrived
     reducers.push_back(
         t$ |
-        filter([](const shared_ptr<const json>& tw){
-            auto& tweet = *tw;
-            return !!tweet.count("timestamp_ms");
-        }) |
+        onlytweets() |
         window_with_time(milliseconds(1000), poolthread) |
         rxo::map([](observable<shared_ptr<const json>> source){
             auto tweetsperminute = source | count() | rxo::map([](int count){
@@ -937,14 +962,59 @@ int main(int argc, const char *argv[])
                 ImGui::TextWrapped("url: %s", URL.c_str());
                 ImGui::Text("Total Tweets: %d", m.total);
 
-                auto cursor = m.tail.rbegin();
-                auto end = m.tail.rbegin() + min(int(m.tail.size()), 10);
-                for(;cursor != end; ++cursor) {
-                    auto& tweet = (**cursor);
-                    if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
-                        ImGui::Separator();
-                        ImGui::Text("%s (@%s)", tweet["user"]["name"].get<string>().c_str() , tweet["user"]["screen_name"].get<string>().c_str() );
-                        ImGui::TextWrapped("%s", tweettext(tweet).c_str());
+                if (!m.tail.empty()) {
+                    // smoothly scroll through tweets.
+
+                    static auto remove = 0.0f;
+                    static auto ratio = 1.0f;
+                    static auto oldestid = (*m.tail.front())["id_str"].is_string() ? (*m.tail.front())["id_str"].get<string>() : string{};
+
+                    // find previous top displayed tweet
+                    auto cursor = m.tail.rbegin();
+                    auto end = m.tail.rend();
+                    cursor = find_if(cursor, end, [&](const shared_ptr<const json>& tw){
+                        auto& tweet = *tw;
+                        auto id = tweet["id_str"].is_string() ? tweet["id_str"].get<string>() : string{};
+                        return id == oldestid;
+                    });
+
+                    auto remaining = cursor - m.tail.rbegin();
+
+                    // scale display speed from 1 new tweet a frame to zero new tweets per frame
+                    ratio = float(remaining) / 50;
+                    remove += min(ratio, 1.0f);
+
+                    auto const count = end - cursor;
+                    if (count == 0) {
+                        // reset after discontinuity
+                        remove = 0.0f;
+                        oldestid = (*m.tail.front())["id_str"].is_string() ? (*m.tail.front())["id_str"].get<string>() : string{};
+                    } else if (remove > .999f && count < int(m.tail.size()) ) {
+                        // reset to display next tweet
+                        remove = 0.0f;
+                        oldestid = (**(cursor - 1))["id_str"].is_string() ? (**(cursor - 1))["id_str"].get<string>() : string{};
+                    }
+
+                    {
+                        ImGui::Columns(2);
+                        RXCPP_UNWIND_AUTO([](){
+                            ImGui::Columns(1);
+                        });
+                        ImGui::Text("Ratio: %.2f", ratio); ImGui::NextColumn();
+                        ImGui::Text("tail remaining: %ld", remaining);
+                    }
+
+                    // display no more than 50 at a time
+                    while(end - cursor > 50) --end;
+
+                    // display tweets
+                    for(;cursor != end; ++cursor) {
+                        auto& tweet = **cursor;
+                        if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
+                            ImGui::Separator();
+                            ImGui::Text("%s (@%s)", tweet["user"]["name"].get<string>().c_str() , tweet["user"]["screen_name"].get<string>().c_str() );
+                            ImGui::TextWrapped("%s", tweettext(tweet).c_str());
+                        }
                     }
                 }
             }
@@ -991,6 +1061,34 @@ int main(int argc, const char *argv[])
         repeat(0) |
         as_dynamic());
 
+    // render framerate
+    renderers.push_back(
+        frame$ |
+        with_latest_from([=, &dumptext, &dumpjson](int, const Model& m){
+            auto renderthreadid = this_thread::get_id();
+            if (mainthreadid != renderthreadid) {
+                cerr << "render on wrong thread!" << endl;
+                terminate();
+            }
+
+            ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
+            if (ImGui::Begin("Twitter App")) {
+                RXCPP_UNWIND_AUTO([](){
+                    ImGui::End();
+                });
+
+                ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+            }
+
+            return m;
+        }, model$) |
+        on_error_resume_next([](std::exception_ptr ep){
+            cerr << rxu::what(ep) << endl;
+            return observable<>::empty<Model>();
+        }) |
+        repeat(0) |
+        as_dynamic());
+
     // subscribe to everything!
     iterate(renderers) |
         merge() |
@@ -1024,15 +1122,6 @@ int main(int argc, const char *argv[])
 
         while (!rl.empty() && rl.peek().when < rl.now()) {
             rl.dispatch();
-        }
-
-        // 1. Show a simple window
-        {
-            ImGui::Begin("Twitter App");
-            RXCPP_UNWIND_AUTO([](){
-                ImGui::End();
-            });
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
         }
 
         // Rendering
