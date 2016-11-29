@@ -65,7 +65,7 @@ struct Model
     std::map<TimeRange, shared_ptr<TweetGroup>> groupedtweets;
     seconds tweetsstart;
     deque<int> tweetsperminute;
-    deque<shared_ptr<const json>> tail;
+    shared_ptr<deque<shared_ptr<const json>>> tail = make_shared<deque<shared_ptr<const json>>>();
 };
 using Reducer = function<Model(Model&)>;
 
@@ -632,10 +632,8 @@ int main(int argc, const char *argv[])
         buffer_with_time(milliseconds(1000), poolthread) |
         rxo::map([=](const vector<shared_ptr<const json>>& tws){
             return Reducer([=](Model& m){
-                m.tail.insert(m.tail.end(), tws.begin(), tws.end());
-                while(m.tail.size() > 300) {
-                    m.tail.pop_front();
-                }
+                m.tail->insert(m.tail->end(), tws.begin(), tws.end());
+                m.tail->erase(m.tail->begin(), m.tail->end() - min(1000, int(m.tail->size())));
                 return std::move(m);
             });
         }) |
@@ -688,13 +686,14 @@ int main(int argc, const char *argv[])
         }) | 
         start_with(Model{}) |
         // only pass model updates to mainthread every 200ms
-        debounce(tweetthread, milliseconds(200)) |
+        sample_with_time(milliseconds(200), tweetthread) |
         // deep copy model before sending to mainthread
         rxo::map([](Model m){
             // deep copy to prevent ux seeing mutations
             for (auto& tg: m.groupedtweets) {
                 tg.second = make_shared<TweetGroup>(*tg.second);
             }
+            m.tail = make_shared<deque<shared_ptr<const json>>>(*m.tail);
             return m;
         }) |
         // give the updated model to the UX
@@ -918,13 +917,14 @@ int main(int argc, const char *argv[])
 
                     auto cursor = group->tweets.rbegin();
                     auto end = group->tweets.rend();
-                    for(;cursor != end; ++cursor) {
+                    for(int remaining = 50;cursor != end && remaining > 0; ++cursor) {
                         auto& tweet = **cursor;
                         if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
                             auto name = tweet["user"]["name"].get<string>();
                             auto screenName = tweet["user"]["screen_name"].get<string>();
                             auto text = tweettext(tweet);
                             if (filter.PassFilter(name.c_str()) || filter.PassFilter(screenName.c_str()) || filter.PassFilter(text.c_str())) {
+                                --remaining;
                                 ImGui::Separator();
                                 ImGui::Text("%s (@%s)", name.c_str() , screenName.c_str() );
                                 ImGui::TextWrapped("%s", text.c_str());
@@ -962,37 +962,42 @@ int main(int argc, const char *argv[])
                 ImGui::TextWrapped("url: %s", URL.c_str());
                 ImGui::Text("Total Tweets: %d", m.total);
 
-                if (!m.tail.empty()) {
+                if (!m.tail->empty()) {
                     // smoothly scroll through tweets.
 
                     static auto remove = 0.0f;
                     static auto ratio = 1.0f;
-                    static auto oldestid = (*m.tail.front())["id_str"].is_string() ? (*m.tail.front())["id_str"].get<string>() : string{};
+                    static auto oldestid = (*m.tail->front())["id_str"].is_string() ? (*m.tail->front())["id_str"].get<string>() : string{};
 
                     // find previous top displayed tweet
-                    auto cursor = m.tail.rbegin();
-                    auto end = m.tail.rend();
+                    auto cursor = m.tail->rbegin();
+                    auto end = m.tail->rend();
                     cursor = find_if(cursor, end, [&](const shared_ptr<const json>& tw){
                         auto& tweet = *tw;
                         auto id = tweet["id_str"].is_string() ? tweet["id_str"].get<string>() : string{};
                         return id == oldestid;
                     });
 
-                    auto remaining = cursor - m.tail.rbegin();
+                    auto remaining = cursor - m.tail->rbegin();
 
                     // scale display speed from 1 new tweet a frame to zero new tweets per frame
                     ratio = float(remaining) / 50;
-                    remove += min(ratio, 1.0f);
+                    remove += ratio;
 
                     auto const count = end - cursor;
                     if (count == 0) {
                         // reset after discontinuity
                         remove = 0.0f;
-                        oldestid = (*m.tail.front())["id_str"].is_string() ? (*m.tail.front())["id_str"].get<string>() : string{};
-                    } else if (remove > .999f && count < int(m.tail.size()) ) {
+                        oldestid = (*m.tail->front())["id_str"].is_string() ? (*m.tail->front())["id_str"].get<string>() : string{};
+                    } else if (remove > .999f) {
                         // reset to display next tweet
+                        auto it = cursor;
+                        while (remove > .999f && (end - it) < int(m.tail->size()) ) {
+                            remove -= 1.0f;
+                            --it;
+                            oldestid = (**(it))["id_str"].is_string() ? (**(it))["id_str"].get<string>() : string{};
+                        }
                         remove = 0.0f;
-                        oldestid = (**(cursor - 1))["id_str"].is_string() ? (**(cursor - 1))["id_str"].get<string>() : string{};
                     }
 
                     {
