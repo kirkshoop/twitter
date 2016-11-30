@@ -4,12 +4,8 @@
 #include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
-#include <oauth.h>
-#include <curl/curl.h>
-#include <json.hpp>
-#include <rxcpp/rx.hpp>
+
 #include <sstream>
 #include <fstream>
 #include <regex>
@@ -19,229 +15,52 @@
 
 using namespace std;
 using namespace std::chrono;
+
+#include "imgui/imgui.h"
+
+#include "imgui/imgui_internal.h"
+
+#include "imgui/imgui_impl_sdl_gl3.h"
+#include <GL/glew.h>
+#include <SDL.h>
+
+#include <oauth.h>
+#include <curl/curl.h>
+
+#include <rxcpp/rx.hpp>
 using namespace rxcpp;
 using namespace rxcpp::rxo;
 using namespace rxcpp::rxs;
 
+#include <json.hpp>
 using json=nlohmann::json;
-
-#include "tweets.h"
 
 #include "rxcurl.h"
 using namespace rxcurl;
 
-#include "imgui.h"
+#include "rximgui.h"
+using namespace rximgui;
 
-#include "imgui_internal.h"
-extern const char*  GetDefaultCompressedFontDataTTFBase85();
+#include "util.h"
+using namespace ::util;
 
-#include "imgui_impl_sdl_gl3.h"
-#include <GL/glew.h>
-#include <SDL.h>
+#include "tweets.h"
+using namespace tweets;
+
+#include "model.h"
+using namespace model;
+
+const ImVec4 clear_color = ImColor(114, 144, 154);
 
 const auto length = milliseconds(60000);
 const auto every = milliseconds(5000);
 const auto keep = minutes(4);
-
-struct TimeRange
-{
-    using timestamp = milliseconds;
-
-    timestamp begin;
-    timestamp end;
-};
-bool operator<(const TimeRange& lhs, const TimeRange& rhs){
-    return lhs.begin < rhs.begin && lhs.end < rhs.end;
-}
-struct TweetGroup
-{
-    vector<shared_ptr<const json>> tweets;
-    std::map<string, int> words;
-};
-struct Model
-{
-    int total = 0;
-    deque<TimeRange> groups;
-    std::map<TimeRange, shared_ptr<TweetGroup>> groupedtweets;
-    seconds tweetsstart;
-    deque<int> tweetsperminute;
-    shared_ptr<deque<shared_ptr<const json>>> tail = make_shared<deque<shared_ptr<const json>>>();
-};
-using Reducer = function<Model(Model&)>;
 
 struct WordCount
 {
     string word;
     int count;
     vector<float> all;
-};
-
-inline float  Clamp(float v, float mn, float mx)                       { return (v < mn) ? mn : (v > mx) ? mx : v; }
-inline ImVec2 Clamp(const ImVec2& f, const ImVec2& mn, ImVec2 mx)      { return ImVec2(Clamp(f.x,mn.x,mx.x), Clamp(f.y,mn.y,mx.y)); }
-inline string tolower(string s) {
-    transform(s.begin(), s.end(), s.begin(), [=](char c){return tolower(c);});
-    return s;
-}
-
-const unordered_set<string> ignoredWords{
-// added
-"rt", "like", "just", "tomorrow", "new", "year", "month", "day", "today", "make", "let", "want", "did", "going", "good", "really", "know", "people", "got", "life", "need", "say", "doing", "great", "right", "time", "best", "happy", "stop", "think", "world", "watch", "gonna", "remember", "way",
-"better", "team", "check", "feel", "talk", "hurry", "look", "live", "home", "game", "run", "i'm", "you're", "person", "house", "real", "thing", "lol", "has", "things", "that's", "thats", "fine", "i've", "you've", "y'all", "did'nt", "said", "come", "coming", "have'nt", "won't", "can't", "don't", 
-"should'nt", "has'nt", "i'd", "it's", "i'll", "what's", "we're", "you'll", "let's'", "lets", "vs", "win", "e280a6", "\xe2\x80\xa6",
-// http://xpo6.com/list-of-english-stop-words/
-"a", "about", "above", "above", "across", "after", "afterwards", "again", "against", "all", "almost", "alone", "along", "already", "also","although","always","am","among", "amongst", "amoungst", "amount",  "an", "and", "another", "any","anyhow","anyone","anything","anyway", "anywhere", "are", "around", "as",  "at", "back","be","became", "because","become","becomes", "becoming", "been", "before", "beforehand", "behind", "being", "below", "beside", "besides", "between", "beyond", "bill", "both", "bottom","but", "by", "call", "can", "cannot", "cant", "co", "con", "could", "couldnt", "cry", "de", "describe", "detail", "do", "done", "down", "due", "during", "each", "eg", "eight", "either", "eleven","else", "elsewhere", "empty", "enough", "etc", "even", "ever", "every", "everyone", "everything", "everywhere", "except", "few", "fifteen", "fify", "fill", "find", "fire", "first", "five", "for", "former", "formerly", "forty", "found", "four", "from", "front", "full", "further", "get", "give", "go", "had", "has", "hasnt", "have", "he", "hence", "her", "here", "hereafter", "hereby", "herein", "hereupon", "hers", "herself", "him", "himself", "his", "how", "however", "hundred", "ie", "if", "in", "inc", "indeed", "interest", "into", "is", "it", "its", "itself", "keep", "last", "latter", "latterly", "least", "less", "ltd", "made", "many", "may", "me", "meanwhile", "might", "mill", "mine", "more", "moreover", "most", "mostly", "move", "much", "must", "my", "myself", "name", "namely", "neither", "never", "nevertheless", "next", "nine", "no", "nobody", "none", "noone", "nor", "not", "nothing", "now", "nowhere", "of", "off", "often", "on", "once", "one", "only", "onto", "or", "other", "others", "otherwise", "our", "ours", "ourselves", "out", "over", "own","part", "per", "perhaps", "please", "put", "rather", "re", "same", "see", "seem", "seemed", "seeming", "seems", "serious", "several", "she", "should", "show", "side", "since", "sincere", "six", "sixty", "so", "some", "somehow", "someone", "something", "sometime", "sometimes", "somewhere", "still", "such", "system", "take", "ten", "than", "that", "the", "their", "them", "themselves", "then", "thence", "there", "thereafter", "thereby", "therefore", "therein", "thereupon", "these", "they", "thickv", "thin", "third", "this", "those", "though", "three", "through", "throughout", "thru", "thus", "to", "together", "too", "top", "toward", "towards", "twelve", "twenty", "two", "un", "under", "until", "up", "upon", "us", "very", "via", "was", "we", "well", "were", "what", "whatever", "when", "whence", "whenever", "where", "whereafter", "whereas", "whereby", "wherein", "whereupon", "wherever", "whether", "which", "while", "whither", "who", "whoever", "whole", "whom", "whose", "why", "will", "with", "within", "without", "would", "yet", "you", "your", "yours", "yourself", "yourselves", "the"};
-
-inline vector<string> splitwords(string URL, string text) {
-
-    static string delimiters = R"(\s+)";
-    auto words = split(text, delimiters, Split::RemoveDelimiter);
-
-    // exclude entities, urls and some punct from this words list
-
-    static regex ignore(R"((\xe2\x80\xa6)|(&[\w]+;)|((http|ftp|https)://[\w-]+(.[\w-]+)+([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?))");
-    static regex expletives(R"(\x66\x75\x63\x6B|\x73\x68\x69\x74|\x64\x61\x6D\x6E)");
-
-    for (auto& word: words) {
-        while (!word.empty() && word.front() == '.') word.erase(word.begin());
-        while (!word.empty() && word.back() == ':') word.resize(word.size() - 1);
-        if (!word.empty() && word.front() == '@') continue;
-        word = regex_replace(tolower(word), ignore, "");
-        if (!word.empty() && word.front() != '#') {
-            while (!word.empty() && ispunct(word.front())) word.erase(word.begin());
-            while (!word.empty() && ispunct(word.back())) word.resize(word.size() - 1);
-        }
-        word = regex_replace(word, expletives, "<expletive>");
-    }
-
-    words.erase(std::remove_if(words.begin(), words.end(), [=](const string& w){
-        return !(w.size() > 2 && ignoredWords.find(w) == ignoredWords.end() && URL.find(w) == string::npos);
-    }), words.end());
-
-    return words;
-}
-
-inline string utctextfrom(seconds time) {
-    stringstream buffer;
-    time_t tb = time.count();
-    struct tm* tmb = gmtime(&tb);
-    buffer << put_time(tmb, "%a %b %d %H:%M:%S %Y");
-    return buffer.str();
-}
-inline string utctextfrom(system_clock::time_point time = system_clock::now()) {
-    return utctextfrom(time_point_cast<seconds>(time).time_since_epoch());
-}
-
-inline function<observable<string>(observable<long>)> stringandignore() {
-    return [](observable<long> s){
-        return s.map([](long){return string{};}).ignore_elements();
-    };
-}
-
-inline function<observable<shared_ptr<const json>>(observable<shared_ptr<const json>>)> onlytweets() {
-    return [](observable<shared_ptr<const json>> s){
-        return s | filter([](const shared_ptr<const json>& tw){
-            auto& tweet = *tw;
-            return !!tweet.count("timestamp_ms");
-        });
-    };
-}
-
-enum class errorcodeclass {
-    Invalid,
-    TcpRetry,
-    ErrorRetry,
-    StatusRetry,
-    RateLimited
-};
-
-inline errorcodeclass errorclassfrom(const http_exception& ex) {
-    switch(ex.code()) {
-        case CURLE_COULDNT_RESOLVE_HOST:
-        case CURLE_COULDNT_CONNECT:
-        case CURLE_OPERATION_TIMEDOUT:
-        case CURLE_BAD_CONTENT_ENCODING:
-        case CURLE_REMOTE_FILE_NOT_FOUND:
-            return errorcodeclass::ErrorRetry;
-        case CURLE_GOT_NOTHING:
-        case CURLE_PARTIAL_FILE:
-        case CURLE_SEND_ERROR:
-        case CURLE_RECV_ERROR:
-            return errorcodeclass::TcpRetry;
-        default:
-            if (ex.code() == CURLE_HTTP_RETURNED_ERROR || ex.httpStatus() > 200) {
-                if (ex.httpStatus() == 420) {
-                    return errorcodeclass::RateLimited;
-                } else if (ex.httpStatus() == 404 ||
-                    ex.httpStatus() == 406 ||
-                    ex.httpStatus() == 413 ||
-                    ex.httpStatus() == 416) {
-                    return errorcodeclass::Invalid;
-                }
-            }
-    };
-    return errorcodeclass::StatusRetry;
-}
-
-auto twitterrequest = [](observe_on_one_worker tweetthread, ::rxcurl::rxcurl factory, string URL, string method, string CONS_KEY, string CONS_SEC, string ATOK_KEY, string ATOK_SEC){
-
-    return observable<>::defer([=](){
-
-        string url;
-        {
-            char* signedurl = nullptr;
-            RXCPP_UNWIND_AUTO([&](){
-                if (!!signedurl) {
-                    free(signedurl);
-                }
-            });
-            signedurl = oauth_sign_url2(
-                URL.c_str(), NULL, OA_HMAC, method.c_str(),
-                CONS_KEY.c_str(), CONS_SEC.c_str(), ATOK_KEY.c_str(), ATOK_SEC.c_str()
-            );
-            url = signedurl;
-        }
-
-        return factory.create(http_request{url, method}) |
-            rxo::map([](http_response r){
-                return r.body.chunks;
-            }) |
-            merge(tweetthread);
-    }) |
-    // https://dev.twitter.com/streaming/overview/connecting
-    timeout(seconds(90), tweetthread) |
-    on_error_resume_next([=](std::exception_ptr ep) -> observable<string> {
-        try {rethrow_exception(ep);}
-        catch (const http_exception& ex) {
-            cerr << ex.what() << endl;
-            switch(errorclassfrom(ex)) {
-                case errorcodeclass::TcpRetry:
-                    cerr << "reconnecting after TCP error" << endl;
-                    return observable<>::empty<string>();
-                case errorcodeclass::ErrorRetry:
-                    cerr << "error code (" << ex.code() << ") - ";
-                case errorcodeclass::StatusRetry:
-                    cerr << "http status (" << ex.httpStatus() << ") - waiting to retry.." << endl;
-                    return observable<>::timer(seconds(5), tweetthread) | stringandignore();
-                case errorcodeclass::RateLimited:
-                    cerr << "rate limited - waiting to retry.." << endl;
-                    return observable<>::timer(minutes(1), tweetthread) | stringandignore();
-                case errorcodeclass::Invalid:
-                    cerr << "invalid request - exit" << endl;
-                default:
-                    return observable<>::error<string>(ep, tweetthread);
-            };
-        }
-        catch (const timeout_error& ex) {
-            cerr << "reconnecting after timeout" << endl;
-            return observable<>::empty<string>();
-        }
-        catch (const exception& ex) {
-            cerr << ex.what() << endl;
-            terminate();
-        }
-        return observable<>::error<string>(ep, tweetthread);
-    }) |
-    repeat(0);
 };
 
 inline void updategroups(
@@ -329,15 +148,20 @@ int main(int argc, const char *argv[])
     const char *ATOK_KEY = argv[3 + argoffset];
     const char *ATOK_SEC = argv[4 + argoffset];
 
-    // ==== Constants - URL
+    // ==== Constants - paths
     string URL = "https://stream.twitter.com/1.1/statuses/";
+    string filepath;
     if (!playback) {
         URL += argv[5 + argoffset];
         cerr << "url = " << URL.c_str() << endl;
+    } else {
+        filepath = argv[1 + argoffset];
+        cerr << "file = " << filepath.c_str() << endl;
     }
 
     // ==== Constants - flags
     const bool isFilter = URL.find("/statuses/filter") != string::npos;
+    string method = isFilter ? "POST" : "GET";
 
     // Setup SDL
     if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER) != 0)
@@ -363,15 +187,7 @@ int main(int argc, const char *argv[])
     // Setup ImGui binding
     ImGui_ImplSdlGL3_Init(window);
 
-    // Load Fonts
-    // (there is a default font, this is only if you want to change it. see extra_fonts/README.txt for more details)
-    //ImGuiIO& io = ImGui::GetIO();    
-    //io.Fonts->AddFontDefault();
-    //io.Fonts->AddFontFromFileTTF("../../extra_fonts/Cousine-Regular.ttf", 15.0f);
-    //io.Fonts->AddFontFromFileTTF("../../extra_fonts/DroidSans.ttf", 16.0f);
-    //io.Fonts->AddFontFromFileTTF("../../extra_fonts/ProggyClean.ttf", 13.0f);
-    //io.Fonts->AddFontFromFileTTF("../../extra_fonts/ProggyTiny.ttf", 10.0f);
-    //io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
+    // Setup Fonts
 
     ImGuiIO& io = ImGui::GetIO();
 
@@ -384,7 +200,7 @@ int main(int argc, const char *argv[])
         0 };
     io.Fonts->AddFontFromFileTTF("./NotoMono-Regular.ttf", 13.0f, nullptr, noto);
 
-    ImFontConfig config;
+    static ImFontConfig config;
     config.MergeMode = true;
     static const ImWchar symbols[] = { 
         0x20a0, 0x2e3b, 
@@ -396,18 +212,13 @@ int main(int argc, const char *argv[])
 
     io.Fonts->Build();
 
+    // Cleanup
     RXCPP_UNWIND_AUTO([&](){
-        // Cleanup
         ImGui_ImplSdlGL3_Shutdown();
         SDL_GL_DeleteContext(glcontext);
         SDL_DestroyWindow(window);
         SDL_Quit();
     });
-
-    const ImVec4 clear_color = ImColor(114, 144, 154);
-    const float fltmax = numeric_limits<float>::max();
-
-    schedulers::run_loop rl;
 
     auto mainthreadid = this_thread::get_id();
     auto mainthread = observe_on_run_loop(rl);
@@ -417,69 +228,23 @@ int main(int argc, const char *argv[])
 
     auto factory = create_rxcurl();
 
-    auto noop = Reducer([=](Model& m){return std::move(m);});
-
     composite_subscription lifetime;
-
-    subjects::subject<int> framebus;
-    auto frameout = framebus.get_subscriber();
-    auto sendframe = [=]() {
-        frameout.on_next(1);
-    };
-    auto frame$ = framebus.get_observable();
 
     // ==== Tweets
 
     observable<string> chunk$;
 
-    // send tweets
+    // request tweets
     if (playback) {
-        auto filepath = argv[1 + argoffset];
-        cerr << filepath << endl;
-
-        chunk$ = observable<>::create<string>([=](subscriber<string> out){
-
-                auto filethread = observe_on_new_thread();
-
-                auto values = make_tuple(ifstream{filepath}, string{});
-                auto state = make_shared<decltype(values)>(move(values));
-
-                // creates a worker whose lifetime is the same as this subscription
-                auto coordinator = filethread.create_coordinator(out.get_subscription());
-
-                auto controller = coordinator.get_worker();
-
-                auto producer = [out, state](const rxsc::schedulable& self) {
-
-                    if (!out.is_subscribed()) {
-                        // terminate loop
-                        return;
-                    }
-
-                    if (getline(get<0>(*state), get<1>(*state)))
-                    {
-                        get<1>(*state)+="\r\n";
-                        out.on_next(get<1>(*state));
-                    } else {
-                        out.on_completed();
-                        return;
-                    }
-
-                    // tail recurse this same action to continue loop
-                    self();
-                };
-
-                //controller.schedule_periodically(controller.now(), milliseconds(100), coordinator.act(producer));
-                controller.schedule(coordinator.act(producer));
-            });
+        chunk$ = filechunks(tweetthread, filepath);
     } else {
-        string method = isFilter ? "POST" : "GET";
-
         chunk$ = twitterrequest(tweetthread, factory, URL, method, CONS_KEY, CONS_SEC, ATOK_KEY, ATOK_SEC);
     }
 
+    // parse tweets
     auto tweet$ = chunk$ | parsetweets(tweetthread);
 
+    // share tweets
     auto t$ = tweet$ |
         on_error_resume_next([](std::exception_ptr ep){
             cerr << rxu::what(ep) << endl;
@@ -487,13 +252,13 @@ int main(int argc, const char *argv[])
         }) |
         repeat(0) |
         publish() |
-        ref_count() |
-        as_dynamic();
+        ref_count();
 
     // ==== Model
 
     vector<observable<Reducer>> reducers;
 
+    // dump json to cout
     reducers.push_back(
         t$ |
         filter([&](const shared_ptr<const json>&){
@@ -503,9 +268,10 @@ int main(int argc, const char *argv[])
             auto& tweet = *tw;
             cout << tweet << "\r\n";
         }) |
-        rxo::map([=](const shared_ptr<const json>&){return noop;}) |
+        noopandignore() |
         start_with(noop));
 
+    // dump text to cout
     reducers.push_back(
         t$ |
         onlytweets() |
@@ -520,7 +286,7 @@ int main(int argc, const char *argv[])
                 cout << tweettext(tweet) << endl;
             }
         }) |
-        rxo::map([=](const shared_ptr<const json>&){return noop;}) |
+        noopandignore() |
         start_with(noop));
 
     if (!playback) {
@@ -534,12 +300,8 @@ int main(int argc, const char *argv[])
                     return std::move(m);
                 });
             }) |
-            on_error_resume_next([](std::exception_ptr ep){
-                cerr << rxu::what(ep) << endl;
-                return observable<>::empty<Reducer>();
-            }) |
-            start_with(noop) |
-            as_dynamic());
+            nooponerror() |
+            start_with(noop));
     }
 
     // group tweets, that arrive, by the timestamp_ms value
@@ -568,16 +330,12 @@ int main(int argc, const char *argv[])
                         return std::move(m);
                     });
                 }) |
-                observe_on(tweetthread) |
-                on_error_resume_next([](std::exception_ptr ep){
-                    cerr << rxu::what(ep) << endl;
-                    return observable<>::empty<Reducer>();
-                });
+                observe_on(tweetthread);
             return group;
         }) |
         merge() |
-        start_with(noop) |
-        as_dynamic());
+        nooponerror() |
+        start_with(noop));
 
     // window tweets by the time that they arrive
     reducers.push_back(
@@ -614,16 +372,12 @@ int main(int argc, const char *argv[])
 
                         return std::move(m);
                     });
-                }) |
-                on_error_resume_next([](std::exception_ptr ep){
-                    cerr << rxu::what(ep) << endl;
-                    return observable<>::empty<Reducer>();
                 });
             return tweetsperminute;
         }) |
         merge() |
-        start_with(noop) |
-        as_dynamic());
+        nooponerror() |
+        start_with(noop));
 
     // keep recent tweets
     reducers.push_back(
@@ -637,12 +391,8 @@ int main(int argc, const char *argv[])
                 return std::move(m);
             });
         }) |
-        on_error_resume_next([](std::exception_ptr ep){
-            cerr << rxu::what(ep) << endl;
-            return observable<>::empty<Reducer>();
-        }) |
-        start_with(noop) |
-        as_dynamic());
+        nooponerror() |
+        start_with(noop));
 
     // record total number of tweets that have arrived
     reducers.push_back(
@@ -659,12 +409,8 @@ int main(int argc, const char *argv[])
             return tweetsperminute;
         }) |
         merge() |
-        on_error_resume_next([](std::exception_ptr ep){
-            cerr << rxu::what(ep) << endl;
-            return observable<>::empty<Reducer>();
-        }) |
-        start_with(noop) |
-        as_dynamic());
+        nooponerror() |
+        start_with(noop));
 
     // combine things that modify the model
     auto reducer$ = iterate(reducers) |
@@ -705,10 +451,11 @@ int main(int argc, const char *argv[])
 
     vector<observable<Model>> renderers;
 
-    // render analisys
+    // render analysis
     renderers.push_back(
         frame$ |
-        with_latest_from([=](int, const Model& m){
+        with_latest_from(rxu::take_at<1>(), model$) |
+        rxo::map([=](const Model& m){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -951,7 +698,7 @@ int main(int argc, const char *argv[])
             }
 
             return m;
-        }, model$) |
+        }) |
         on_error_resume_next([](std::exception_ptr ep){
             cerr << rxu::what(ep) << endl;
             return observable<>::empty<Model>();
@@ -962,7 +709,8 @@ int main(int argc, const char *argv[])
     // render recent
     renderers.push_back(
         frame$ |
-        with_latest_from([=](int, const Model& m){
+        with_latest_from(rxu::take_at<1>(), model$) |
+        rxo::map([=](const Model& m){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -1041,7 +789,7 @@ int main(int argc, const char *argv[])
             }
 
             return m;
-        }, model$) |
+        }) |
         on_error_resume_next([](std::exception_ptr ep){
             cerr << rxu::what(ep) << endl;
             return observable<>::empty<Model>();
@@ -1052,7 +800,8 @@ int main(int argc, const char *argv[])
     // render controls
     renderers.push_back(
         frame$ |
-        with_latest_from([=, &dumptext, &dumpjson](int, const Model& m){
+        with_latest_from(rxu::take_at<1>(), model$) |
+        rxo::map([=, &dumptext, &dumpjson](const Model& m){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -1060,7 +809,7 @@ int main(int argc, const char *argv[])
             }
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
-            if (ImGui::Begin("Controls")) {
+            if (ImGui::Begin("Output")) {
                 RXCPP_UNWIND_AUTO([](){
                     ImGui::End();
                 });
@@ -1068,13 +817,13 @@ int main(int argc, const char *argv[])
                 static int dumpmode = dumptext ? 1 : dumpjson ? 2 : 0;
                 ImGui::RadioButton("None", &dumpmode, 0); ImGui::SameLine();
                 ImGui::RadioButton("Text", &dumpmode, 1); ImGui::SameLine();
-                ImGui::RadioButton("JSon", &dumpmode, 2);
+                ImGui::RadioButton("Json", &dumpmode, 2);
                 dumptext = dumpmode == 1;
                 dumpjson = dumpmode == 2;
             }
 
             return m;
-        }, model$) |
+        }) |
         on_error_resume_next([](std::exception_ptr ep){
             cerr << rxu::what(ep) << endl;
             return observable<>::empty<Model>();
@@ -1085,7 +834,8 @@ int main(int argc, const char *argv[])
     // render framerate
     renderers.push_back(
         frame$ |
-        with_latest_from([=, &dumptext, &dumpjson](int, const Model& m){
+        with_latest_from(rxu::take_at<1>(), model$) |
+        rxo::map([=](const Model& m){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -1102,7 +852,7 @@ int main(int argc, const char *argv[])
             }
 
             return m;
-        }, model$) |
+        }) |
         on_error_resume_next([](std::exception_ptr ep){
             cerr << rxu::what(ep) << endl;
             return observable<>::empty<Model>();

@@ -51,10 +51,10 @@ MESSAGE( STATUS "RXCPP_INCLUDE_DIRS: " ${RXCPP_INCLUDE_DIRS} )
 # define the sources
 set(SAMPLE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/imgui.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/imgui_draw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/imgui_demo.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/imgui_impl_sdl_gl3.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui_draw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui_demo.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui_impl_sdl_gl3.cpp
 )
 add_executable(${SAMPLE_PROJECT} ${SAMPLE_SOURCES})
 add_executable(rxcpp::examples::${SAMPLE_PROJECT} ALIAS ${SAMPLE_PROJECT})
