@@ -813,18 +813,34 @@ int main(int argc, const char *argv[])
 
                     ImGui::Text("%s -> %s", utctextfrom(duration_cast<seconds>(window.begin)).c_str(), utctextfrom(duration_cast<seconds>(window.end)).c_str());
 
-                    ImGui::Text("Tweets: %ld", group->tweets.size());
-                    ImGui::Text("Words : %ld", group->words.size());
+                    {
+                        ImGui::Columns(2);
+                        RXCPP_UNWIND_AUTO([](){
+                            ImGui::Columns(1);
+                        });
+                        ImGui::Text("Tweets: %ld", group->tweets.size()); ImGui::NextColumn();
+                        ImGui::Text("Words : %ld", group->words.size());
+                    }
 
-                    static vector<WordCount> top10;
-                    top10.clear();
-                    copy(words.begin(), words.begin() + min(int(words.size()), 10), back_inserter(top10));
+                    static ImGuiTextFilter filter;
+
+                    filter.Draw();
+                    
+                    static vector<WordCount> top;
+                    auto remaining = 10;
+                    top.clear();
+                    copy_if(words.begin(), words.end(), back_inserter(top), [&](const WordCount& w){
+                        if (remaining == 0) return false;
+                        bool result = filter.PassFilter(w.word.c_str());
+                        if (result) --remaining;
+                        return result;
+                    });
 
                     float maxCount = 0.0f;
                     for(auto& w : m.groups) {
                         auto& g = m.groupedtweets.at(w);
                         auto end = g->words.end();
-                        for(auto& word : top10) {
+                        for(auto& word : top) {
                             auto wrd = g->words.find(word.word);
                             float count = 0.0f;
                             if (wrd != end) {
@@ -835,7 +851,7 @@ int main(int argc, const char *argv[])
                         }
                     }
 
-                    for (auto& w : top10) {
+                    for (auto& w : top) {
                         ImGui::Text("%d - %s", w.count, w.word.c_str());
                         ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
                         ImGui::PlotLines("", &w.all[0], w.all.size(), 0, nullptr, 0.0f, maxCount, plotextent);
@@ -969,7 +985,7 @@ int main(int argc, const char *argv[])
                     static auto ratio = 1.0f;
                     static auto oldestid = (*m.tail->front())["id_str"].is_string() ? (*m.tail->front())["id_str"].get<string>() : string{};
 
-                    // find previous top displayed tweet
+                    // find first tweet to display
                     auto cursor = m.tail->rbegin();
                     auto end = m.tail->rend();
                     cursor = find_if(cursor, end, [&](const shared_ptr<const json>& tw){
@@ -986,7 +1002,7 @@ int main(int argc, const char *argv[])
 
                     auto const count = end - cursor;
                     if (count == 0) {
-                        // reset after discontinuity
+                        // reset top tweet after discontinuity
                         remove = 0.0f;
                         oldestid = (*m.tail->front())["id_str"].is_string() ? (*m.tail->front())["id_str"].get<string>() : string{};
                     } else if (remove > .999f) {
@@ -1005,8 +1021,8 @@ int main(int argc, const char *argv[])
                         RXCPP_UNWIND_AUTO([](){
                             ImGui::Columns(1);
                         });
-                        ImGui::Text("Ratio: %.2f", ratio); ImGui::NextColumn();
-                        ImGui::Text("tail remaining: %ld", remaining);
+                        ImGui::Text("scroll speed: %.2f", ratio); ImGui::NextColumn();
+                        ImGui::Text("pending: %ld", remaining);
                     }
 
                     // display no more than 50 at a time
