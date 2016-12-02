@@ -54,7 +54,7 @@ const ImVec4 clear_color = ImColor(114, 144, 154);
 
 const auto length = milliseconds(60000);
 const auto every = milliseconds(5000);
-const auto keep = minutes(4);
+auto keep = minutes(10);
 
 struct WordCount
 {
@@ -69,12 +69,14 @@ inline void updategroups(
     const shared_ptr<const json>& tw = shared_ptr<const json>{}, 
     const vector<string>& words = vector<string>{}) {
 
-    auto rangebegin = duration_cast<minutes>(timestamp - length);
-    auto rangeend = rangebegin+duration_cast<minutes>(length);
-    auto searchend = timestamp + length;
+    auto searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - length);
+    if (!tw) {
+        searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - keep);
+    }
+    auto searchend = timestamp;
     auto offset = milliseconds(0);
-    for (;rangeend+offset < searchend;offset += duration_cast<milliseconds>(every)){
-        auto key = TimeRange{rangebegin+offset, rangeend+offset};
+    for (;searchbegin+offset < searchend;offset += duration_cast<milliseconds>(every)){
+        auto key = TimeRange{searchbegin+offset, searchbegin+offset+length};
         auto it = m.groupedtweets.find(key);
         if (it == m.groupedtweets.end()) {
             // add group
@@ -84,7 +86,7 @@ inline void updategroups(
         }
 
         if (!!tw) {
-            if (rangebegin+offset <= timestamp && timestamp < rangeend+offset) {
+            if (searchbegin+offset <= timestamp && timestamp < searchbegin+offset+length) {
                 it->second->tweets.push_back(tw);
 
                 for (auto& word: words) {
@@ -292,7 +294,7 @@ int main(int argc, const char *argv[])
     if (!playback) {
         // update groups on time interval so that minutes with no tweets are recorded.
         reducers.push_back(
-            observable<>::interval(every, poolthread) |
+            observable<>::interval(milliseconds(500), poolthread) |
             rxo::map([=](long){
                 return Reducer([=](Model& m){
                     auto rangebegin = time_point_cast<milliseconds>(system_clock::now()).time_since_epoch();
@@ -348,23 +350,33 @@ int main(int argc, const char *argv[])
                 rxo::map([=](const shared_ptr<const json>&) {
                     return Reducer([=](Model& m){
 
-                        static const auto maxsize = duration_cast<seconds>(keep).count()/duration_cast<seconds>(every).count();
+                        auto maxsize = (duration_cast<seconds>(keep).count()+duration_cast<seconds>(length).count())/duration_cast<seconds>(every).count();
 
                         if (m.tweetsperminute.size() == 0) {
-                            m.tweetsstart = rangebegin;
+                            m.tweetsstart = duration_cast<seconds>(rangebegin + length);
+                        }
+                        
+                        if (static_cast<long long>(m.tweetsperminute.size()) < maxsize) {
+                            // fill in missing history
+                            while (maxsize > static_cast<long long>(m.tweetsperminute.size())) {
+                                m.tweetsperminute.push_front(0);
+                                m.tweetsstart -= duration_cast<seconds>(every);
+                            }
                         }
 
                         if (rangebegin >= m.tweetsstart) {
 
                             const auto i = duration_cast<seconds>(rangebegin - m.tweetsstart).count()/duration_cast<seconds>(every).count();
 
-                            while (i >= int(m.tweetsperminute.size())) {
+                            // add future buckets
+                            while(i >= static_cast<long long>(m.tweetsperminute.size())) {
                                 m.tweetsperminute.push_back(0);
                             }
 
                             ++m.tweetsperminute[i];
                         }
 
+                        // discard expired data
                         while(static_cast<long long>(m.tweetsperminute.size()) > maxsize) {
                             m.tweetsstart += duration_cast<seconds>(every);
                             m.tweetsperminute.pop_front();
@@ -422,18 +434,20 @@ int main(int argc, const char *argv[])
 
     auto model$ = reducer$ |
         // apply things that modify the model
-        scan(Model{}, [](Model& m, Reducer& f){
+        scan(Model{}, [=](Model& m, Reducer& f){
             try {
-                return f(m);
+                auto r = f(m);
+                r.timestamp = tweetthread.now();
+                return r;
             } catch (const std::exception& e) {
                 cerr << e.what() << endl;
                 return std::move(m);
             }
         }) | 
         start_with(Model{}) |
-        // only pass model updates to mainthread every 200ms
+        // only copy model updates every 200ms
         sample_with_time(milliseconds(200), tweetthread) |
-        // deep copy model before sending to mainthread
+        // deep copy model
         rxo::map([](Model m){
             // deep copy to prevent ux seeing mutations
             for (auto& tg: m.groupedtweets) {
@@ -442,43 +456,82 @@ int main(int argc, const char *argv[])
             m.tail = make_shared<deque<shared_ptr<const json>>>(*m.tail);
             return m;
         }) |
-        // give the updated model to the UX
-        observe_on(mainthread) |
         publish() |
         ref_count();
 
     // ==== View
+
+    static int idx = 0;
+
+    struct ViewModel
+    {
+        ViewModel(Model& m) : m(m) {
+            if (idx >= 0 && idx < int(m.groups.size())) {
+                auto& window = m.groups.at(idx);
+                auto& group = m.groupedtweets.at(window);
+
+                words.clear();
+                transform(group->words.begin(), group->words.end(), back_inserter(words), [&](const pair<string, int>& word){
+                    return WordCount{word.first, word.second, {}};
+                });
+                sort(words.begin(), words.end(), [](const WordCount& l, const WordCount& r){
+                    return l.count > r.count;
+                });
+            }
+
+            {
+                vector<pair<milliseconds, float>> groups;
+                transform(m.groupedtweets.begin(), m.groupedtweets.end(), back_inserter(groups), [&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                    return make_pair(group.first.begin, static_cast<float>(group.second->tweets.size()));
+                });
+                sort(groups.begin(), groups.end(), [](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
+                    return l.first < r.first;
+                });
+                transform(groups.begin(), groups.end(), back_inserter(groupedtpm), [&](const pair<milliseconds, float>& group){
+                    return group.second;
+                });
+            }
+        }
+
+        Model m;
+        operator Model& (){
+            return m;
+        }
+
+        vector<WordCount> words;
+        vector<float> groupedtpm;
+    };
+
+    auto viewModel$ = model$ |
+        // use a worker thread to calculate the ViewModel
+        observe_on(poolthread) |
+        // if the processing of the model takes too long, skip until caught up
+        filter([=](const Model& m){
+            return m.timestamp + milliseconds(100) < tweetthread.now();
+        }) |
+        rxo::map([](Model& m){
+            return ViewModel{m};
+        }) |
+        // give the updated model to the UX
+        observe_on(mainthread) |
+        publish() |
+        ref_count();
 
     vector<observable<Model>> renderers;
 
     // render analysis
     renderers.push_back(
         frame$ |
-        with_latest_from(rxu::take_at<1>(), model$) |
-        rxo::map([=](const Model& m){
+        with_latest_from(rxu::take_at<1>(), viewModel$) |
+        rxo::map([=](const ViewModel& vm){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
                 terminate();
             }
 
-            static int idx = 0;
-            static vector<WordCount> words;
-            words.clear();
-            auto collectwords = [&](){
-                if (idx >= 0 && idx < int(m.groups.size())) {
-                    auto& window = m.groups.at(idx);
-                    auto& group = m.groupedtweets.at(window);
-
-                    words.clear();
-                    transform(group->words.begin(), group->words.end(), back_inserter(words), [&](const pair<string, int>& word){
-                        return WordCount{word.first, word.second, {}};
-                    });
-                    sort(words.begin(), words.end(), [](const WordCount& l, const WordCount& r){
-                        return l.count > r.count;
-                    });
-                }
-            };
+            auto& m = vm.m;
+            auto& words = vm.words;
 
             ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Live Analysis")) {
@@ -487,10 +540,14 @@ int main(int argc, const char *argv[])
                 });
 
                 ImGui::TextWrapped("url: %s", URL.c_str());
+
                 ImGui::Text("Now: %s, Total Tweets: %d", utctextfrom().c_str(), m.total);
+                static int minutestokeep = keep.count();
+                ImGui::InputInt("minutes to keep", &minutestokeep);
+                keep = minutes(minutestokeep);
 
                 // by window
-                if (ImGui::CollapsingHeader("Tweets Per Minute (windowed by arrival time)"))
+                if (ImGui::CollapsingHeader("Tweets Per Minute (windowed by arrival time)", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
                 {
                     static vector<float> tpm;
                     tpm.clear();
@@ -507,22 +564,7 @@ int main(int argc, const char *argv[])
                 // by group
                 if (ImGui::CollapsingHeader("Tweets Per Minute (grouped by timestamp_ms)", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
                 {
-                    static vector<float> tpm;
-                    tpm.clear();
-
-                    {
-                        static vector<pair<milliseconds, float>> groups;
-                        groups.clear();
-                        transform(m.groupedtweets.begin(), m.groupedtweets.end(), back_inserter(groups), [&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
-                            return make_pair(group.first.begin, static_cast<float>(group.second->tweets.size()));
-                        });
-                        sort(groups.begin(), groups.end(), [](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
-                            return l.first < r.first;
-                        });
-                        transform(groups.begin(), groups.end(), back_inserter(tpm), [&](const pair<milliseconds, float>& group){
-                            return group.second;
-                        });
-                    }
+                    auto& tpm = vm.groupedtpm;
 
                     if (!m.groupedtweets.empty()) {
                         ImGui::Text("%s -> %s", 
@@ -549,10 +591,6 @@ int main(int argc, const char *argv[])
                 RXCPP_UNWIND_AUTO([](){
                     ImGui::End();
                 });
-
-                if (words.empty()) {
-                    collectwords();
-                }
 
                 if (idx >= 0 && idx < int(m.groups.size())) {
                     auto& window = m.groups.at(idx);
@@ -612,8 +650,20 @@ int main(int argc, const char *argv[])
                     ImGui::End();
                 });
 
-                if (words.empty()) {
-                    collectwords();
+                static const ImVec4 textcolor = ImGui::GetStyle().Colors[ImGuiCol_Text];
+                static ImVec4 hashtagcolor = ImColor(0, 230, 0);
+                static ImVec4 mentioncolor = ImColor(0, 200, 230);
+                if (ImGui::BeginPopupContextWindow())
+                {
+                    RXCPP_UNWIND_AUTO([](){
+                        ImGui::EndPopup();
+                    });
+
+                    ImGui::ColorEdit3("hashtagcolor", reinterpret_cast<float*>(&hashtagcolor));
+                    ImGui::ColorEdit3("mentioncolor", reinterpret_cast<float*>(&mentioncolor));
+
+                    if (ImGui::Button("Close"))
+                        ImGui::CloseCurrentPopup();
                 }
 
                 auto origin = ImGui::GetCursorScreenPos();
@@ -632,8 +682,8 @@ int main(int argc, const char *argv[])
                     auto cursor = words.begin();
                     auto end = words.end();
                     for(;cursor != end; ++cursor) {
+                        auto color = cursor->word[0] == '@' ? mentioncolor : cursor->word[0] == '#' ? hashtagcolor : textcolor;
                         auto place = Clamp(static_cast<float>(cursor->count)/maxCount, 0.0f, 0.9999f);
-                        auto color = ImGui::GetStyle().Colors[ImGuiCol_Text];
                         auto size = Clamp(font->FontSize*scale*place, font->FontSize*scale*0.25f, font->FontSize*scale);
                         auto extent = font->CalcTextSizeA(size, fltmax, 0.0f, &cursor->word[0], &cursor->word[0] + cursor->word.size(), nullptr);
 
@@ -709,7 +759,7 @@ int main(int argc, const char *argv[])
     // render recent
     renderers.push_back(
         frame$ |
-        with_latest_from(rxu::take_at<1>(), model$) |
+        with_latest_from(rxu::take_at<1>(), viewModel$) |
         rxo::map([=](const Model& m){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
@@ -800,7 +850,7 @@ int main(int argc, const char *argv[])
     // render controls
     renderers.push_back(
         frame$ |
-        with_latest_from(rxu::take_at<1>(), model$) |
+        with_latest_from(rxu::take_at<1>(), viewModel$) |
         rxo::map([=, &dumptext, &dumpjson](const Model& m){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
@@ -834,7 +884,7 @@ int main(int argc, const char *argv[])
     // render framerate
     renderers.push_back(
         frame$ |
-        with_latest_from(rxu::take_at<1>(), model$) |
+        with_latest_from(rxu::take_at<1>(), viewModel$) |
         rxo::map([=](const Model& m){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {

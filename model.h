@@ -21,6 +21,7 @@ struct TweetGroup
 
 struct Model
 {
+    rxsc::scheduler::clock_type::time_point timestamp;
     int total = 0;
     deque<TimeRange> groups;
     std::map<TimeRange, shared_ptr<TweetGroup>> groupedtweets;
