@@ -64,10 +64,12 @@ struct WordCount
 };
 
 inline void updategroups(
-    Model& m,
+    shared_ptr<Model>& md,
     milliseconds timestamp, 
     const shared_ptr<const json>& tw = shared_ptr<const json>{}, 
     const vector<string>& words = vector<string>{}) {
+
+    auto& m = *md;
 
     auto searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - length);
     if (!tw) {
@@ -296,7 +298,7 @@ int main(int argc, const char *argv[])
         reducers.push_back(
             observable<>::interval(milliseconds(500), poolthread) |
             rxo::map([=](long){
-                return Reducer([=](Model& m){
+                return Reducer([=](shared_ptr<Model>& m){
                     auto rangebegin = time_point_cast<milliseconds>(system_clock::now()).time_since_epoch();
                     updategroups(m, rangebegin);
                     return std::move(m);
@@ -322,9 +324,9 @@ int main(int argc, const char *argv[])
 
                     auto text = tweettext(tweet);
 
-                    auto words = splitwords(URL, text);
+                    auto words = splitwords(text);
 
-                    return Reducer([=](Model& m){
+                    return Reducer([=](shared_ptr<Model>& m){
                         auto t = timestamp_ms(tw);
 
                         updategroups(m, t, tw, words);
@@ -348,7 +350,8 @@ int main(int argc, const char *argv[])
             auto rangebegin = time_point_cast<seconds>(system_clock::now()).time_since_epoch();
             auto tweetsperminute = source | 
                 rxo::map([=](const shared_ptr<const json>&) {
-                    return Reducer([=](Model& m){
+                    return Reducer([=](shared_ptr<Model>& md){
+                        auto& m = *md;
 
                         auto maxsize = (duration_cast<seconds>(keep).count()+duration_cast<seconds>(length).count())/duration_cast<seconds>(every).count();
 
@@ -382,7 +385,7 @@ int main(int argc, const char *argv[])
                             m.tweetsperminute.pop_front();
                         }
 
-                        return std::move(m);
+                        return std::move(md);
                     });
                 });
             return tweetsperminute;
@@ -397,10 +400,11 @@ int main(int argc, const char *argv[])
         onlytweets() |
         buffer_with_time(milliseconds(1000), poolthread) |
         rxo::map([=](const vector<shared_ptr<const json>>& tws){
-            return Reducer([=](Model& m){
+            return Reducer([=](shared_ptr<Model>& md){
+                auto& m = *md;
                 m.tail->insert(m.tail->end(), tws.begin(), tws.end());
                 m.tail->erase(m.tail->begin(), m.tail->end() - min(1000, int(m.tail->size())));
-                return std::move(m);
+                return std::move(md);
             });
         }) |
         nooponerror() |
@@ -413,8 +417,8 @@ int main(int argc, const char *argv[])
         window_with_time(milliseconds(1000), poolthread) |
         rxo::map([](observable<shared_ptr<const json>> source){
             auto tweetsperminute = source | count() | rxo::map([](int count){
-                return Reducer([=](Model& m){
-                    m.total += count;
+                return Reducer([=](shared_ptr<Model>& m){
+                    m->total += count;
                     return std::move(m);
                 });
             });
@@ -433,29 +437,22 @@ int main(int argc, const char *argv[])
     //
 
     auto model$ = reducer$ |
+        // give the reducers to the UX
+        observe_on(mainthread) |
         // apply things that modify the model
-        scan(Model{}, [=](Model& m, Reducer& f){
+        scan(make_shared<Model>(), [=](shared_ptr<Model>& m, Reducer& f){
             try {
                 auto r = f(m);
-                r.timestamp = tweetthread.now();
+                r->timestamp = mainthread.now();
                 return r;
             } catch (const std::exception& e) {
                 cerr << e.what() << endl;
                 return std::move(m);
             }
         }) | 
-        start_with(Model{}) |
+        start_with(make_shared<Model>()) |
         // only copy model updates every 200ms
-        sample_with_time(milliseconds(200), tweetthread) |
-        // deep copy model
-        rxo::map([](Model m){
-            // deep copy to prevent ux seeing mutations
-            for (auto& tg: m.groupedtweets) {
-                tg.second = make_shared<TweetGroup>(*tg.second);
-            }
-            m.tail = make_shared<deque<shared_ptr<const json>>>(*m.tail);
-            return m;
-        }) |
+        sample_with_time(milliseconds(200), mainthread) |
         publish() |
         ref_count();
 
@@ -465,10 +462,10 @@ int main(int argc, const char *argv[])
 
     struct ViewModel
     {
-        ViewModel(Model& m) : m(m) {
-            if (idx >= 0 && idx < int(m.groups.size())) {
-                auto& window = m.groups.at(idx);
-                auto& group = m.groupedtweets.at(window);
+        ViewModel(shared_ptr<Model>& m) : m(m) {
+            if (idx >= 0 && idx < int(m->groups.size())) {
+                auto& window = m->groups.at(idx);
+                auto& group = m->groupedtweets.at(window);
 
                 words.clear();
                 transform(group->words.begin(), group->words.end(), back_inserter(words), [&](const pair<string, int>& word){
@@ -481,7 +478,7 @@ int main(int argc, const char *argv[])
 
             {
                 vector<pair<milliseconds, float>> groups;
-                transform(m.groupedtweets.begin(), m.groupedtweets.end(), back_inserter(groups), [&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                transform(m->groupedtweets.begin(), m->groupedtweets.end(), back_inserter(groups), [&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
                     return make_pair(group.first.begin, static_cast<float>(group.second->tweets.size()));
                 });
                 sort(groups.begin(), groups.end(), [](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
@@ -493,9 +490,9 @@ int main(int argc, const char *argv[])
             }
         }
 
-        Model m;
+        shared_ptr<Model> m;
         operator Model& (){
-            return m;
+            return *m;
         }
 
         vector<WordCount> words;
@@ -503,21 +500,17 @@ int main(int argc, const char *argv[])
     };
 
     auto viewModel$ = model$ |
-        // use a worker thread to calculate the ViewModel
-        observe_on(poolthread) |
         // if the processing of the model takes too long, skip until caught up
-        filter([=](const Model& m){
-            return m.timestamp + milliseconds(100) < tweetthread.now();
+        filter([=](const shared_ptr<Model>& m){
+            return m->timestamp <= mainthread.now();
         }) |
-        rxo::map([](Model& m){
+        rxo::map([](shared_ptr<Model>& m){
             return ViewModel{m};
         }) |
-        // give the updated model to the UX
-        observe_on(mainthread) |
         publish() |
         ref_count();
 
-    vector<observable<Model>> renderers;
+    vector<observable<shared_ptr<Model>>> renderers;
 
     // render analysis
     renderers.push_back(
@@ -530,8 +523,10 @@ int main(int argc, const char *argv[])
                 terminate();
             }
 
-            auto& m = vm.m;
+            auto& m = *vm.m;
             auto& words = vm.words;
+
+            static ImGuiTextFilter wordfilter;
 
             ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Live Analysis")) {
@@ -574,8 +569,7 @@ int main(int argc, const char *argv[])
                     ImVec2 plotposition = ImGui::GetCursorScreenPos();
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
                     ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, fltmax, plotextent);
-                    assert(tpm.size() == m.groups.size());
-                    if (ImGui::IsItemHovered()) {
+                    if (tpm.size() == m.groups.size() && ImGui::IsItemHovered()) {
                         const float t = Clamp((ImGui::GetMousePos().x - plotposition.x) / plotextent.x, 0.0f, 0.9999f);
                         idx = (int)(t * (m.groups.size() - 1));
                     }
@@ -607,16 +601,14 @@ int main(int argc, const char *argv[])
                         ImGui::Text("Words : %ld", group->words.size());
                     }
 
-                    static ImGuiTextFilter filter;
-
-                    filter.Draw();
+                    wordfilter.Draw();
                     
                     static vector<WordCount> top;
                     auto remaining = 10;
                     top.clear();
                     copy_if(words.begin(), words.end(), back_inserter(top), [&](const WordCount& w){
                         if (remaining == 0) return false;
-                        bool result = filter.PassFilter(w.word.c_str());
+                        bool result = wordfilter.PassFilter(w.word.c_str());
                         if (result) --remaining;
                         return result;
                     });
@@ -676,41 +668,45 @@ int main(int argc, const char *argv[])
                 static vector<ImRect> taken;
                 taken.clear();
 
-                if (!words.empty()) {
-                    mt19937 source;
-                    const auto maxCount = words.front().count;
-                    auto cursor = words.begin();
-                    auto end = words.end();
-                    for(;cursor != end; ++cursor) {
-                        auto color = cursor->word[0] == '@' ? mentioncolor : cursor->word[0] == '#' ? hashtagcolor : textcolor;
-                        auto place = Clamp(static_cast<float>(cursor->count)/maxCount, 0.0f, 0.9999f);
-                        auto size = Clamp(font->FontSize*scale*place, font->FontSize*scale*0.25f, font->FontSize*scale);
-                        auto extent = font->CalcTextSizeA(size, fltmax, 0.0f, &cursor->word[0], &cursor->word[0] + cursor->word.size(), nullptr);
+                // start a reproducable series each frame.
+                mt19937 source;
 
-                        auto offsetx = uniform_int_distribution<>(0, area.x - extent.x);
-                        auto offsety = uniform_int_distribution<>(0, area.y - extent.y);
+                auto maxCount = 0;
+                auto cursor = words.begin();
+                auto end = words.end();
+                for(;cursor != end; ++cursor) {
+                    if (!wordfilter.PassFilter(cursor->word.c_str())) continue;
 
-                        ImRect bound;
-                        int checked = -1;
-                        int trys = 10;
-                        for(;checked < int(taken.size()) && trys > 0;--trys){
-                            checked = 0;
-                            auto position = ImVec2(origin.x + offsetx(source), origin.y + offsety(source));
-                            bound = ImRect(position.x, position.y, position.x + extent.x, position.y + extent.y);
-                            for(auto& t : taken) {
-                                if (t.Overlaps(bound)) break;
-                                ++checked;
-                            }
+                    maxCount = max(maxCount, cursor->count);
+
+                    auto color = cursor->word[0] == '@' ? mentioncolor : cursor->word[0] == '#' ? hashtagcolor : textcolor;
+                    auto place = Clamp(static_cast<float>(cursor->count)/maxCount, 0.0f, 0.9999f);
+                    auto size = Clamp(font->FontSize*scale*place, font->FontSize*scale*0.25f, font->FontSize*scale);
+                    auto extent = font->CalcTextSizeA(size, fltmax, 0.0f, &cursor->word[0], &cursor->word[0] + cursor->word.size(), nullptr);
+
+                    auto offsetx = uniform_int_distribution<>(0, area.x - extent.x);
+                    auto offsety = uniform_int_distribution<>(0, area.y - extent.y);
+
+                    ImRect bound;
+                    int checked = -1;
+                    int trys = 10;
+                    for (;checked < int(taken.size()) && trys > 0;--trys){
+                        checked = 0;
+                        auto position = ImVec2(origin.x + offsetx(source), origin.y + offsety(source));
+                        bound = ImRect(position.x, position.y, position.x + extent.x, position.y + extent.y);
+                        for(auto& t : taken) {
+                            if (t.Overlaps(bound)) break;
+                            ++checked;
                         }
-
-                        if (checked < int(taken.size()) && trys == 0) {
-                            //word did not fit
-                            break;
-                        }
-
-                        ImGui::GetWindowDrawList()->AddText(font, size, bound.Min, ImColor(color), &cursor->word[0], &cursor->word[0] + cursor->word.size(), 0.0f, &clip);
-                        taken.push_back(bound);
                     }
+
+                    if (checked < int(taken.size()) && trys == 0) {
+                        //word did not fit
+                        break;
+                    }
+
+                    ImGui::GetWindowDrawList()->AddText(font, size, bound.Min, ImColor(color), &cursor->word[0], &cursor->word[0] + cursor->word.size(), 0.0f, &clip);
+                    taken.push_back(bound);
                 }
             }
 
@@ -747,25 +743,22 @@ int main(int argc, const char *argv[])
                 }
             }
 
-            return m;
+            return vm.m;
         }) |
-        on_error_resume_next([](std::exception_ptr ep){
-            cerr << rxu::what(ep) << endl;
-            return observable<>::empty<Model>();
-        }) |
-        repeat(0) |
-        as_dynamic());
+        reportandrepeat());
 
     // render recent
     renderers.push_back(
         frame$ |
         with_latest_from(rxu::take_at<1>(), viewModel$) |
-        rxo::map([=](const Model& m){
+        rxo::map([=](const ViewModel& vm){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
                 terminate();
             }
+
+            auto& m = *vm.m;
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Recent Tweets")) {
@@ -838,20 +831,15 @@ int main(int argc, const char *argv[])
                 }
             }
 
-            return m;
+            return vm.m;
         }) |
-        on_error_resume_next([](std::exception_ptr ep){
-            cerr << rxu::what(ep) << endl;
-            return observable<>::empty<Model>();
-        }) |
-        repeat(0) |
-        as_dynamic());
+        reportandrepeat());
 
     // render controls
     renderers.push_back(
         frame$ |
         with_latest_from(rxu::take_at<1>(), viewModel$) |
-        rxo::map([=, &dumptext, &dumpjson](const Model& m){
+        rxo::map([=, &dumptext, &dumpjson](const ViewModel& vm){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -872,20 +860,15 @@ int main(int argc, const char *argv[])
                 dumpjson = dumpmode == 2;
             }
 
-            return m;
+            return vm.m;
         }) |
-        on_error_resume_next([](std::exception_ptr ep){
-            cerr << rxu::what(ep) << endl;
-            return observable<>::empty<Model>();
-        }) |
-        repeat(0) |
-        as_dynamic());
+        reportandrepeat());
 
     // render framerate
     renderers.push_back(
         frame$ |
         with_latest_from(rxu::take_at<1>(), viewModel$) |
-        rxo::map([=](const Model& m){
+        rxo::map([=](const ViewModel& vm){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -901,19 +884,14 @@ int main(int argc, const char *argv[])
                 ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
             }
 
-            return m;
+            return vm.m;
         }) |
-        on_error_resume_next([](std::exception_ptr ep){
-            cerr << rxu::what(ep) << endl;
-            return observable<>::empty<Model>();
-        }) |
-        repeat(0) |
-        as_dynamic());
+        reportandrepeat());
 
     // subscribe to everything!
     iterate(renderers) |
         merge() |
-        subscribe<Model>([](const Model&){});
+        subscribe<shared_ptr<Model>>([](const shared_ptr<Model>&){});
 
     // ==== Main
 
