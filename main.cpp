@@ -27,6 +27,8 @@ using namespace std::chrono;
 #include <oauth.h>
 #include <curl/curl.h>
 
+#include <range/v3/all.hpp>
+
 #include <rxcpp/rx.hpp>
 using namespace rxcpp;
 using namespace rxcpp::rxo;
@@ -83,7 +85,7 @@ inline void updategroups(
         if (it == m.groupedtweets.end()) {
             // add group
             m.groups.push_back(key);
-            sort(m.groups.begin(), m.groups.end());
+            m.groups |= ranges::action::sort(less<TimeRange>{});
             it = m.groupedtweets.insert(make_pair(key, make_shared<TweetGroup>())).first;
         }
 
@@ -467,33 +469,36 @@ int main(int argc, const char *argv[])
                 auto& window = m->groups.at(idx);
                 auto& group = m->groupedtweets.at(window);
 
-                words.clear();
-                transform(group->words.begin(), group->words.end(), back_inserter(words), [&](const pair<string, int>& word){
-                    return WordCount{word.first, word.second, {}};
-                });
-                sort(words.begin(), words.end(), [](const WordCount& l, const WordCount& r){
-                    return l.count > r.count;
-                });
+                words = group->words |
+                    ranges::view::transform([&](const pair<string, int>& word){
+                        return WordCount{word.first, word.second, {}};
+                    });
+
+                words |=
+                    ranges::action::sort([](const WordCount& l, const WordCount& r){
+                        return l.count > r.count;
+                    });
             }
 
             {
-                vector<pair<milliseconds, float>> groups;
-                transform(m->groupedtweets.begin(), m->groupedtweets.end(), back_inserter(groups), [&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
-                    return make_pair(group.first.begin, static_cast<float>(group.second->tweets.size()));
-                });
-                sort(groups.begin(), groups.end(), [](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
-                    return l.first < r.first;
-                });
-                transform(groups.begin(), groups.end(), back_inserter(groupedtpm), [&](const pair<milliseconds, float>& group){
-                    return group.second;
-                });
+                vector<pair<milliseconds, float>> groups = m->groupedtweets |
+                    ranges::view::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                        return make_pair(group.first.begin, static_cast<float>(group.second->tweets.size()));
+                    });
+
+                groups |=
+                    ranges::action::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
+                        return l.first < r.first;
+                    });
+
+                groupedtpm = groups |
+                    ranges::view::transform([&](const pair<milliseconds, float>& group){
+                        return group.second;
+                    });
             }
         }
 
         shared_ptr<Model> m;
-        operator Model& (){
-            return *m;
-        }
 
         vector<WordCount> words;
         vector<float> groupedtpm;
@@ -546,7 +551,8 @@ int main(int argc, const char *argv[])
                 {
                     static vector<float> tpm;
                     tpm.clear();
-                    transform(m.tweetsperminute.begin(), m.tweetsperminute.end(), back_inserter(tpm), [](int count){return static_cast<float>(count);});
+                    tpm = m.tweetsperminute |
+                        ranges::view::transform([](int count){return static_cast<float>(count);});
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
                     if (!m.tweetsperminute.empty()) {
                         ImGui::Text("%s -> %s", 
@@ -604,14 +610,10 @@ int main(int argc, const char *argv[])
                     wordfilter.Draw();
                     
                     static vector<WordCount> top;
-                    auto remaining = 10;
                     top.clear();
-                    copy_if(words.begin(), words.end(), back_inserter(top), [&](const WordCount& w){
-                        if (remaining == 0) return false;
-                        bool result = wordfilter.PassFilter(w.word.c_str());
-                        if (result) --remaining;
-                        return result;
-                    });
+                    top = words |
+                        ranges::view::filter([&](const WordCount& w){ return wordfilter.PassFilter(w.word.c_str()); }) |
+                        ranges::view::take(10);
 
                     float maxCount = 0.0f;
                     for(auto& w : m.groups) {
