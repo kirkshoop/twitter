@@ -314,32 +314,22 @@ int main(int argc, const char *argv[])
     reducers.push_back(
         t$ |
         onlytweets() |
-        group_by([](const shared_ptr<const json>& tw) {
-            auto m = duration_cast<minutes>(timestamp_ms(tw));
-            return m;
+        observe_on(poolthread) |
+        rxo::map([=](const shared_ptr<const json>& tw){
+            auto& tweet = *tw;
+
+            auto text = tweettext(tweet);
+
+            auto words = splitwords(text);
+
+            return Reducer([=](shared_ptr<Model>& m){
+                auto t = timestamp_ms(tw);
+
+                updategroups(m, t, tw, words);
+
+                return std::move(m);
+            });
         }) |
-        rxo::map([=](grouped_observable<minutes, shared_ptr<const json>> g){
-            auto group = g | 
-                take_until(observable<>::timer(length * 2), poolthread) | 
-                rxo::map([=](const shared_ptr<const json>& tw){
-                    auto& tweet = *tw;
-
-                    auto text = tweettext(tweet);
-
-                    auto words = splitwords(text);
-
-                    return Reducer([=](shared_ptr<Model>& m){
-                        auto t = timestamp_ms(tw);
-
-                        updategroups(m, t, tw, words);
-
-                        return std::move(m);
-                    });
-                }) |
-                observe_on(tweetthread);
-            return group;
-        }) |
-        merge() |
         nooponerror() |
         start_with(noop));
 
@@ -432,15 +422,14 @@ int main(int argc, const char *argv[])
 
     // combine things that modify the model
     auto reducer$ = iterate(reducers) |
-        merge(tweetthread);
+        // give the reducers to the UX
+        merge(mainthread);
 
     //
     // apply reducers to the model (Flux architecture)
     //
 
     auto model$ = reducer$ |
-        // give the reducers to the UX
-        observe_on(mainthread) |
         // apply things that modify the model
         scan(make_shared<Model>(), [=](shared_ptr<Model>& m, Reducer& f){
             try {
@@ -453,7 +442,7 @@ int main(int argc, const char *argv[])
             }
         }) | 
         start_with(make_shared<Model>()) |
-        // only copy model updates every 200ms
+        // only view model updates every 200ms
         sample_with_time(milliseconds(200), mainthread) |
         publish() |
         ref_count();

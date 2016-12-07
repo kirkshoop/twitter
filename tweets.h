@@ -51,7 +51,7 @@ auto isEndOfTweet = [](const string& s){
     return *it0 == '\r' && *it1 == '\n';
 };
 
-inline function<observable<shared_ptr<const json>>(observable<string>)> parsetweets(observe_on_one_worker tweetthread) {
+inline auto parsetweets(observe_on_one_worker tweetthread) -> function<observable<shared_ptr<const json>>(observable<string>)> {
     return [=](observable<string> chunk$){
         // create strings split on \r
         auto string$ = chunk$ |
@@ -91,7 +91,7 @@ inline function<observable<shared_ptr<const json>>(observable<string>)> parsetwe
     };
 }
 
-inline function<observable<shared_ptr<const json>>(observable<shared_ptr<const json>>)> onlytweets() {
+inline auto onlytweets() -> function<observable<shared_ptr<const json>>(observable<shared_ptr<const json>>)> {
     return [](observable<shared_ptr<const json>> s){
         return s | filter([](const shared_ptr<const json>& tw){
             auto& tweet = *tw;
@@ -172,6 +172,51 @@ auto filechunks = [](observe_on_one_worker tweetthread, string filepath) {
     });
 };
 
+auto twitter_stream_reconnection = [](observe_on_one_worker tweetthread){
+    return [=](observable<string> chunks){
+        return chunks |
+            // https://dev.twitter.com/streaming/overview/connecting
+            timeout(seconds(90), tweetthread) |
+            on_error_resume_next([=](std::exception_ptr ep) -> observable<string> {
+                try {rethrow_exception(ep);}
+                catch (const http_exception& ex) {
+                    cerr << ex.what() << endl;
+                    switch(errorclassfrom(ex)) {
+                        case errorcodeclass::TcpRetry:
+                            cerr << "reconnecting after TCP error" << endl;
+                            return observable<>::empty<string>();
+                        case errorcodeclass::ErrorRetry:
+                            cerr << "error code (" << ex.code() << ") - ";
+                        case errorcodeclass::StatusRetry:
+                            cerr << "http status (" << ex.httpStatus() << ") - waiting to retry.." << endl;
+                            return observable<>::timer(seconds(5), tweetthread) | stringandignore();
+                        case errorcodeclass::RateLimited:
+                            cerr << "rate limited - waiting to retry.." << endl;
+                            return observable<>::timer(minutes(1), tweetthread) | stringandignore();
+                        case errorcodeclass::Invalid:
+                            cerr << "invalid request - exit" << endl;
+                        default:
+                            return observable<>::error<string>(ep, tweetthread);
+                    };
+                }
+                catch (const timeout_error& ex) {
+                    cerr << "reconnecting after timeout" << endl;
+                    return observable<>::empty<string>();
+                }
+                catch (const exception& ex) {
+                    cerr << ex.what() << endl;
+                    terminate();
+                }
+                catch (...) {
+                    cerr << "unknown exception - not derived from std::exception" << endl;
+                    terminate();
+                }
+                return observable<>::error<string>(ep, tweetthread);
+            }) |
+            repeat(0);
+    };
+};
+
 auto twitterrequest = [](observe_on_one_worker tweetthread, ::rxcurl::rxcurl factory, string URL, string method, string CONS_KEY, string CONS_SEC, string ATOK_KEY, string ATOK_SEC){
 
     return observable<>::defer([=](){
@@ -197,45 +242,7 @@ auto twitterrequest = [](observe_on_one_worker tweetthread, ::rxcurl::rxcurl fac
             }) |
             merge(tweetthread);
     }) |
-    // https://dev.twitter.com/streaming/overview/connecting
-    timeout(seconds(90), tweetthread) |
-    on_error_resume_next([=](std::exception_ptr ep) -> observable<string> {
-        try {rethrow_exception(ep);}
-        catch (const http_exception& ex) {
-            cerr << ex.what() << endl;
-            switch(errorclassfrom(ex)) {
-                case errorcodeclass::TcpRetry:
-                    cerr << "reconnecting after TCP error" << endl;
-                    return observable<>::empty<string>();
-                case errorcodeclass::ErrorRetry:
-                    cerr << "error code (" << ex.code() << ") - ";
-                case errorcodeclass::StatusRetry:
-                    cerr << "http status (" << ex.httpStatus() << ") - waiting to retry.." << endl;
-                    return observable<>::timer(seconds(5), tweetthread) | stringandignore();
-                case errorcodeclass::RateLimited:
-                    cerr << "rate limited - waiting to retry.." << endl;
-                    return observable<>::timer(minutes(1), tweetthread) | stringandignore();
-                case errorcodeclass::Invalid:
-                    cerr << "invalid request - exit" << endl;
-                default:
-                    return observable<>::error<string>(ep, tweetthread);
-            };
-        }
-        catch (const timeout_error& ex) {
-            cerr << "reconnecting after timeout" << endl;
-            return observable<>::empty<string>();
-        }
-        catch (const exception& ex) {
-            cerr << ex.what() << endl;
-            terminate();
-        }
-        catch (...) {
-            cerr << "unknown exception - not derived from std::exception" << endl;
-            terminate();
-        }
-        return observable<>::error<string>(ep, tweetthread);
-    }) |
-    repeat(0);
+    twitter_stream_reconnection(tweetthread);
 };
 
 
