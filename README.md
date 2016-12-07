@@ -1,6 +1,7 @@
 # twitter
 
-rxcpp example of live twitter analysis
+## rxcpp example of live twitter analysis
+
 [![president-elect](https://img.youtube.com/vi/QFcy-jQpvBg/0.jpg)](https://www.youtube.com/edit?video_id=QFcy-jQpvBg)
 
 This project was inspired by a [talk](https://blog.niallconnaughton.com/2016/10/25/ndc-sydney-talk/) by @nconnaughton - [github](https://github.com/NiallConnaughton/rx-realtime-twitter), [twitter](https://twitter.com/nconnaughton) 
