@@ -58,13 +58,6 @@ const auto length = milliseconds(60000);
 const auto every = milliseconds(5000);
 auto keep = minutes(10);
 
-struct WordCount
-{
-    string word;
-    int count;
-    vector<float> all;
-};
-
 inline void updategroups(
     shared_ptr<Model>& md,
     milliseconds timestamp, 
@@ -449,50 +442,6 @@ int main(int argc, const char *argv[])
 
     // ==== View
 
-    static int idx = 0;
-
-    struct ViewModel
-    {
-        ViewModel(shared_ptr<Model>& m) : m(m) {
-            if (idx >= 0 && idx < int(m->groups.size())) {
-                auto& window = m->groups.at(idx);
-                auto& group = m->groupedtweets.at(window);
-
-                words = group->words |
-                    ranges::view::transform([&](const pair<string, int>& word){
-                        return WordCount{word.first, word.second, {}};
-                    });
-
-                words |=
-                    ranges::action::sort([](const WordCount& l, const WordCount& r){
-                        return l.count > r.count;
-                    });
-            }
-
-            {
-                vector<pair<milliseconds, float>> groups = m->groupedtweets |
-                    ranges::view::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
-                        return make_pair(group.first.begin, static_cast<float>(group.second->tweets.size()));
-                    });
-
-                groups |=
-                    ranges::action::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
-                        return l.first < r.first;
-                    });
-
-                groupedtpm = groups |
-                    ranges::view::transform([&](const pair<milliseconds, float>& group){
-                        return group.second;
-                    });
-            }
-        }
-
-        shared_ptr<Model> m;
-
-        vector<WordCount> words;
-        vector<float> groupedtpm;
-    };
-
     auto viewModel$ = model$ |
         // if the processing of the model takes too long, skip until caught up
         filter([=](const shared_ptr<Model>& m){
@@ -504,13 +453,13 @@ int main(int argc, const char *argv[])
         publish() |
         ref_count();
 
-    vector<observable<shared_ptr<Model>>> renderers;
+    vector<observable<ViewModel>> renderers;
 
     // render analysis
     renderers.push_back(
         frame$ |
         with_latest_from(rxu::take_at<1>(), viewModel$) |
-        rxo::map([=](const ViewModel& vm){
+        tap([=](const ViewModel& vm){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -524,16 +473,28 @@ int main(int argc, const char *argv[])
 
             ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Live Analysis")) {
-                RXCPP_UNWIND_AUTO([](){
+                RXCPP_UNWIND(End, [](){
                     ImGui::End();
                 });
 
                 ImGui::TextWrapped("url: %s", URL.c_str());
 
-                ImGui::Text("Now: %s, Total Tweets: %d", utctextfrom().c_str(), m.total);
-                static int minutestokeep = keep.count();
-                ImGui::InputInt("minutes to keep", &minutestokeep);
-                keep = minutes(minutestokeep);
+                {
+                    ImGui::Columns(2);
+                    RXCPP_UNWIND_AUTO([](){
+                        ImGui::Columns(1);
+                    });
+
+                    ImGui::Text("Now: %s", utctextfrom().c_str()); ImGui::NextColumn();
+                    ImGui::Text("Total Tweets: %d", m.total);
+                }
+
+                if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    static int minutestokeep = keep.count();
+                    ImGui::InputInt("minutes to keep", &minutestokeep);
+                    keep = minutes(minutestokeep);
+                }
 
                 // by window
                 if (ImGui::CollapsingHeader("Tweets Per Minute (windowed by arrival time)", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
@@ -573,11 +534,13 @@ int main(int argc, const char *argv[])
                     ImGui::PushItemWidth(ImGui::GetContentRegionAvailWidth());
                     ImGui::SliderInt("", &idx, 0, m.groups.size() - 1);
                 }
+                End.dismiss();
             }
+            ImGui::End();
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Top Words from group")) {
-                RXCPP_UNWIND_AUTO([](){
+                RXCPP_UNWIND(End, [](){
                     ImGui::End();
                 });
 
@@ -625,11 +588,13 @@ int main(int argc, const char *argv[])
                         ImGui::PlotLines("", &w.all[0], w.all.size(), 0, nullptr, 0.0f, maxCount, plotextent);
                     }
                 }
+                End.dismiss();
             }
+            ImGui::End();
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Word Cloud from group")) {
-                RXCPP_UNWIND_AUTO([](){
+                RXCPP_UNWIND(End, [](){
                     ImGui::End();
                 });
 
@@ -699,11 +664,13 @@ int main(int argc, const char *argv[])
                     ImGui::GetWindowDrawList()->AddText(font, size, bound.Min, ImColor(color), &cursor->word[0], &cursor->word[0] + cursor->word.size(), 0.0f, &clip);
                     taken.push_back(bound);
                 }
+                End.dismiss();
             }
+            ImGui::End();
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Tweets from group")) {
-                RXCPP_UNWIND_AUTO([](){
+                RXCPP_UNWIND(End, [](){
                     ImGui::End();
                 });
 
@@ -732,9 +699,9 @@ int main(int argc, const char *argv[])
                         }
                     }
                 }
+                End.dismiss();
             }
-
-            return vm.m;
+            ImGui::End();
         }) |
         reportandrepeat());
 
@@ -742,7 +709,7 @@ int main(int argc, const char *argv[])
     renderers.push_back(
         frame$ |
         with_latest_from(rxu::take_at<1>(), viewModel$) |
-        rxo::map([=](const ViewModel& vm){
+        tap([=](const ViewModel& vm){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -753,7 +720,7 @@ int main(int argc, const char *argv[])
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Recent Tweets")) {
-                RXCPP_UNWIND_AUTO([](){
+                RXCPP_UNWIND(End, [](){
                     ImGui::End();
                 });
 
@@ -820,9 +787,9 @@ int main(int argc, const char *argv[])
                         }
                     }
                 }
+                End.dismiss();
             }
-
-            return vm.m;
+            ImGui::End();
         }) |
         reportandrepeat());
 
@@ -830,7 +797,7 @@ int main(int argc, const char *argv[])
     renderers.push_back(
         frame$ |
         with_latest_from(rxu::take_at<1>(), viewModel$) |
-        rxo::map([=, &dumptext, &dumpjson](const ViewModel& vm){
+        tap([=, &dumptext, &dumpjson](const ViewModel&){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -839,7 +806,7 @@ int main(int argc, const char *argv[])
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Output")) {
-                RXCPP_UNWIND_AUTO([](){
+                RXCPP_UNWIND(End, [](){
                     ImGui::End();
                 });
 
@@ -849,9 +816,10 @@ int main(int argc, const char *argv[])
                 ImGui::RadioButton("Json", &dumpmode, 2);
                 dumptext = dumpmode == 1;
                 dumpjson = dumpmode == 2;
-            }
 
-            return vm.m;
+                End.dismiss();
+            }
+            ImGui::End();
         }) |
         reportandrepeat());
 
@@ -859,7 +827,7 @@ int main(int argc, const char *argv[])
     renderers.push_back(
         frame$ |
         with_latest_from(rxu::take_at<1>(), viewModel$) |
-        rxo::map([=](const ViewModel& vm){
+        tap([=](const ViewModel&){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -868,21 +836,21 @@ int main(int argc, const char *argv[])
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Twitter App")) {
-                RXCPP_UNWIND_AUTO([](){
+                RXCPP_UNWIND(End, [](){
                     ImGui::End();
                 });
 
                 ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+                End.dismiss();
             }
-
-            return vm.m;
+            ImGui::End();
         }) |
         reportandrepeat());
 
     // subscribe to everything!
     iterate(renderers) |
         merge() |
-        subscribe<shared_ptr<Model>>([](const shared_ptr<Model>&){});
+        subscribe<ViewModel>([](const ViewModel&){});
 
     // ==== Main
 

@@ -51,12 +51,65 @@ inline function<observable<Reducer>(observable<shared_ptr<const json>>)> noopand
     };
 }
 
-inline function<observable<shared_ptr<Model>>(observable<shared_ptr<Model>>)> reportandrepeat() {
-    return [](observable<shared_ptr<Model>> s){
+struct WordCount
+{
+    string word;
+    int count;
+    vector<float> all;
+};
+
+int idx = 0;
+
+struct ViewModel
+{
+    ViewModel() {}
+    explicit ViewModel(shared_ptr<Model>& m) : m(m) {
+        if (idx >= 0 && idx < int(m->groups.size())) {
+            auto& window = m->groups.at(idx);
+            auto& group = m->groupedtweets.at(window);
+
+            words = group->words |
+                ranges::view::transform([&](const pair<string, int>& word){
+                    return WordCount{word.first, word.second, {}};
+                });
+
+            words |=
+                ranges::action::sort([](const WordCount& l, const WordCount& r){
+                    return l.count > r.count;
+                });
+        }
+
+        {
+            vector<pair<milliseconds, float>> groups = m->groupedtweets |
+                ranges::view::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                    return make_pair(group.first.begin, static_cast<float>(group.second->tweets.size()));
+                });
+
+            groups |=
+                ranges::action::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
+                    return l.first < r.first;
+                });
+
+            groupedtpm = groups |
+                ranges::view::transform([&](const pair<milliseconds, float>& group){
+                    return group.second;
+                });
+        }
+    }
+
+    shared_ptr<Model> m;
+
+    vector<WordCount> words;
+    vector<float> groupedtpm;
+};
+
+
+inline function<observable<ViewModel>(observable<ViewModel>)> reportandrepeat() {
+    return [](observable<ViewModel> s){
         return s | 
             on_error_resume_next([](std::exception_ptr ep){
                 cerr << rxu::what(ep) << endl;
-                return observable<>::empty<shared_ptr<Model>>();
+                return observable<>::empty<ViewModel>();
             }) | 
             repeat(0);
     };
