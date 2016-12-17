@@ -52,9 +52,9 @@ auto isEndOfTweet = [](const string& s){
 };
 
 inline auto parsetweets(observe_on_one_worker tweetthread) -> function<observable<shared_ptr<const json>>(observable<string>)> {
-    return [=](observable<string> chunk$){
+    return [=](observable<string> chunks){
         // create strings split on \r
-        auto string$ = chunk$ |
+        auto strings = chunks |
             concat_map([](const string& s){
                 auto splits = split(s, "\r\n");
                 return iterate(move(splits));
@@ -66,21 +66,21 @@ inline auto parsetweets(observe_on_one_worker tweetthread) -> function<observabl
             ref_count();
 
         // filter to last string in each line
-        auto close$ = string$ |
+        auto closes = strings |
             filter(isEndOfTweet) |
             rxo::map([](const string&){return 0;});
 
         // group strings by line
-        auto linewindow$ = string$ |
-            window_toggle(close$ | start_with(0), [=](int){return close$;});
+        auto linewindows = strings |
+            window_toggle(closes | start_with(0), [=](int){return closes;});
 
         // reduce the strings for a line into one string
-        auto line$ = linewindow$ |
+        auto lines = linewindows |
             flat_map([](const observable<string>& w) {
                 return w | start_with<string>("") | sum();
             });
 
-        return line$ |
+        return lines |
             filter([](const string& s){
                 return s.size() > 2 && s.find_first_not_of("\r\n") != string::npos;
             }) | 

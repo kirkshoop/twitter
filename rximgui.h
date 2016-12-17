@@ -10,7 +10,7 @@ auto frameout = framebus.get_subscriber();
 auto sendframe = []() {
     frameout.on_next(1);
 };
-auto frame$ = framebus.get_observable();
+auto frames = framebus.get_observable();
 
 schedulers::run_loop rl;
 

@@ -231,20 +231,20 @@ int main(int argc, const char *argv[])
 
     // ==== Tweets
 
-    observable<string> chunk$;
+    observable<string> chunks;
 
     // request tweets
     if (playback) {
-        chunk$ = filechunks(tweetthread, filepath);
+        chunks = filechunks(tweetthread, filepath);
     } else {
-        chunk$ = twitterrequest(tweetthread, factory, URL, method, CONS_KEY, CONS_SEC, ATOK_KEY, ATOK_SEC);
+        chunks = twitterrequest(tweetthread, factory, URL, method, CONS_KEY, CONS_SEC, ATOK_KEY, ATOK_SEC);
     }
 
     // parse tweets
-    auto tweet$ = chunk$ | parsetweets(tweetthread);
+    auto tweets = chunks | parsetweets(tweetthread);
 
     // share tweets
-    auto t$ = tweet$ |
+    auto ts = tweets |
         on_error_resume_next([](std::exception_ptr ep){
             cerr << rxu::what(ep) << endl;
             return observable<>::empty<shared_ptr<const json>>();
@@ -259,7 +259,7 @@ int main(int argc, const char *argv[])
 
     // dump json to cout
     reducers.push_back(
-        t$ |
+        ts |
         filter([&](const shared_ptr<const json>&){
             return dumpjson;
         }) |
@@ -272,7 +272,7 @@ int main(int argc, const char *argv[])
 
     // dump text to cout
     reducers.push_back(
-        t$ |
+        ts |
         onlytweets() |
         filter([&](const shared_ptr<const json>&){
             return dumptext;
@@ -305,7 +305,7 @@ int main(int argc, const char *argv[])
 
     // group tweets, that arrive, by the timestamp_ms value
     reducers.push_back(
-        t$ |
+        ts |
         onlytweets() |
         observe_on(poolthread) |
         rxo::map([=](const shared_ptr<const json>& tw){
@@ -328,13 +328,14 @@ int main(int argc, const char *argv[])
 
     // window tweets by the time that they arrive
     reducers.push_back(
-        t$ |
+        ts |
         onlytweets() |
         window_with_time(length, every, poolthread) |
         rxo::map([](observable<shared_ptr<const json>> source){
             auto rangebegin = time_point_cast<seconds>(system_clock::now()).time_since_epoch();
             auto tweetsperminute = source | 
-                rxo::map([=](const shared_ptr<const json>&) {
+                start_with(shared_ptr<const json>{}) |
+                rxo::map([=](const shared_ptr<const json>& tw) {
                     return Reducer([=](shared_ptr<Model>& md){
                         auto& m = *md;
 
@@ -361,7 +362,9 @@ int main(int argc, const char *argv[])
                                 m.tweetsperminute.push_back(0);
                             }
 
-                            ++m.tweetsperminute[i];
+                            if (tw) {
+                                ++m.tweetsperminute[i];
+                            }
                         }
 
                         // discard expired data
@@ -381,7 +384,7 @@ int main(int argc, const char *argv[])
 
     // keep recent tweets
     reducers.push_back(
-        t$ |
+        ts |
         onlytweets() |
         buffer_with_time(milliseconds(1000), poolthread) |
         rxo::map([=](const vector<shared_ptr<const json>>& tws){
@@ -397,7 +400,7 @@ int main(int argc, const char *argv[])
 
     // record total number of tweets that have arrived
     reducers.push_back(
-        t$ |
+        ts |
         onlytweets() |
         window_with_time(milliseconds(1000), poolthread) |
         rxo::map([](observable<shared_ptr<const json>> source){
@@ -414,7 +417,7 @@ int main(int argc, const char *argv[])
         start_with(noop));
 
     // combine things that modify the model
-    auto reducer$ = iterate(reducers) |
+    auto actions = iterate(reducers) |
         // give the reducers to the UX
         merge(mainthread);
 
@@ -422,7 +425,7 @@ int main(int argc, const char *argv[])
     // apply reducers to the model (Flux architecture)
     //
 
-    auto model$ = reducer$ |
+    auto models = actions |
         // apply things that modify the model
         scan(make_shared<Model>(), [=](shared_ptr<Model>& m, Reducer& f){
             try {
@@ -442,7 +445,7 @@ int main(int argc, const char *argv[])
 
     // ==== View
 
-    auto viewModel$ = model$ |
+    auto viewModels = models |
         // if the processing of the model takes too long, skip until caught up
         filter([=](const shared_ptr<Model>& m){
             return m->timestamp <= mainthread.now();
@@ -457,8 +460,8 @@ int main(int argc, const char *argv[])
 
     // render analysis
     renderers.push_back(
-        frame$ |
-        with_latest_from(rxu::take_at<1>(), viewModel$) |
+        frames |
+        with_latest_from(rxu::take_at<1>(), viewModels) |
         tap([=](const ViewModel& vm){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
@@ -707,8 +710,8 @@ int main(int argc, const char *argv[])
 
     // render recent
     renderers.push_back(
-        frame$ |
-        with_latest_from(rxu::take_at<1>(), viewModel$) |
+        frames |
+        with_latest_from(rxu::take_at<1>(), viewModels) |
         tap([=](const ViewModel& vm){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
@@ -795,8 +798,8 @@ int main(int argc, const char *argv[])
 
     // render controls
     renderers.push_back(
-        frame$ |
-        with_latest_from(rxu::take_at<1>(), viewModel$) |
+        frames |
+        with_latest_from(rxu::take_at<1>(), viewModels) |
         tap([=, &dumptext, &dumpjson](const ViewModel&){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
@@ -825,8 +828,8 @@ int main(int argc, const char *argv[])
 
     // render framerate
     renderers.push_back(
-        frame$ |
-        with_latest_from(rxu::take_at<1>(), viewModel$) |
+        frames |
+        with_latest_from(rxu::take_at<1>(), viewModels) |
         tap([=](const ViewModel&){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
