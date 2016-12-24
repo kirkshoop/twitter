@@ -11,6 +11,7 @@
 #include <regex>
 #include <deque>
 #include <map>
+#include <unordered_map>
 #include <random>
 
 using namespace std;
@@ -46,11 +47,12 @@ using namespace rximgui;
 #include "util.h"
 using namespace ::util;
 
+#include "model.h"
+using namespace model;
+
 #include "tweets.h"
 using namespace tweets;
 
-#include "model.h"
-using namespace model;
 
 const ImVec4 clear_color = ImColor(114, 144, 154);
 
@@ -59,15 +61,21 @@ const auto every = milliseconds(5000);
 auto keep = minutes(10);
 
 inline void updategroups(
-    shared_ptr<Model>& md,
+    Model& model,
     milliseconds timestamp, 
-    const shared_ptr<const json>& tw = shared_ptr<const json>{}, 
+    Tweet tw = Tweet(), 
     const vector<string>& words = vector<string>{}) {
+
+    auto& md = model.data;
+
+    for (auto& word: words) {
+        ++md->allwords[word];
+    }
 
     auto& m = *md;
 
     auto searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - length);
-    if (!tw) {
+    if (words.size() > 0) {
         searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - keep);
     }
     auto searchend = timestamp;
@@ -82,7 +90,7 @@ inline void updategroups(
             it = m.groupedtweets.insert(make_pair(key, make_shared<TweetGroup>())).first;
         }
 
-        if (!!tw) {
+        if (words.size() > 0) {
             if (searchbegin+offset <= timestamp && timestamp < searchbegin+offset+length) {
                 it->second->tweets.push_back(tw);
 
@@ -98,19 +106,6 @@ inline void updategroups(
         m.groupedtweets.erase(m.groups.front());
         m.groups.pop_front();
     }
-}
-
-inline string tweettext(const json& tweet) {
-    if (!!tweet.count("text") && tweet["text"].is_string()) {
-        return tweet["text"];
-    }
-    return {};
-}
-
-inline milliseconds timestamp_ms(const shared_ptr<const json>& tw) {
-    auto& tweet = *tw;
-    auto t = milliseconds(stoll(tweet["timestamp_ms"].get<string>()));
-    return t;
 }
 
 int main(int argc, const char *argv[])
@@ -241,13 +236,13 @@ int main(int argc, const char *argv[])
     }
 
     // parse tweets
-    auto tweets = chunks | parsetweets(tweetthread);
+    auto tweets = chunks | parsetweets(poolthread, tweetthread);
 
     // share tweets
     auto ts = tweets |
         on_error_resume_next([](std::exception_ptr ep){
             cerr << rxu::what(ep) << endl;
-            return observable<>::empty<shared_ptr<const json>>();
+            return observable<>::empty<Tweet>();
         }) |
         repeat(0) |
         publish() |
@@ -260,11 +255,11 @@ int main(int argc, const char *argv[])
     // dump json to cout
     reducers.push_back(
         ts |
-        filter([&](const shared_ptr<const json>&){
+        filter([&](const Tweet&){
             return dumpjson;
         }) |
-        tap([=](const shared_ptr<const json>& tw){
-            auto& tweet = *tw;
+        tap([=](const Tweet& tw){
+            auto& tweet = tw.data->tweet;
             cout << tweet << "\r\n";
         }) |
         noopandignore() |
@@ -274,11 +269,11 @@ int main(int argc, const char *argv[])
     reducers.push_back(
         ts |
         onlytweets() |
-        filter([&](const shared_ptr<const json>&){
+        filter([&](const Tweet&){
             return dumptext;
         }) |
-        tap([=](const shared_ptr<const json>& tw){
-            auto& tweet = *tw;
+        tap([=](const Tweet& tw){
+            auto& tweet = tw.data->tweet;
             if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
                 cout << "------------------------------------" << endl;
                 cout << tweet["user"]["name"].get<string>() << " (" << tweet["user"]["screen_name"].get<string>() << ")" << endl;
@@ -293,7 +288,7 @@ int main(int argc, const char *argv[])
         reducers.push_back(
             observable<>::interval(milliseconds(500), poolthread) |
             rxo::map([=](long){
-                return Reducer([=](shared_ptr<Model>& m){
+                return Reducer([=](Model& m){
                     auto rangebegin = time_point_cast<milliseconds>(system_clock::now()).time_since_epoch();
                     updategroups(m, rangebegin);
                     return std::move(m);
@@ -308,14 +303,14 @@ int main(int argc, const char *argv[])
         ts |
         onlytweets() |
         observe_on(poolthread) |
-        rxo::map([=](const shared_ptr<const json>& tw){
-            auto& tweet = *tw;
+        rxo::map([=](const Tweet& tw){
+            auto& tweet = tw.data->tweet;
 
             auto text = tweettext(tweet);
 
             auto words = splitwords(text);
 
-            return Reducer([=](shared_ptr<Model>& m){
+            return Reducer([=](Model& m){
                 auto t = timestamp_ms(tw);
 
                 updategroups(m, t, tw, words);
@@ -331,13 +326,13 @@ int main(int argc, const char *argv[])
         ts |
         onlytweets() |
         window_with_time(length, every, poolthread) |
-        rxo::map([](observable<shared_ptr<const json>> source){
+        rxo::map([](observable<Tweet> source){
             auto rangebegin = time_point_cast<seconds>(system_clock::now()).time_since_epoch();
             auto tweetsperminute = source | 
-                start_with(shared_ptr<const json>{}) |
-                rxo::map([=](const shared_ptr<const json>& tw) {
-                    return Reducer([=](shared_ptr<Model>& md){
-                        auto& m = *md;
+                start_with(Tweet{}) |
+                rxo::map([=](const Tweet& tw) {
+                    return Reducer([=](Model& md){
+                        auto& m = *(md.data);
 
                         auto maxsize = (duration_cast<seconds>(keep).count()+duration_cast<seconds>(length).count())/duration_cast<seconds>(every).count();
 
@@ -362,7 +357,7 @@ int main(int argc, const char *argv[])
                                 m.tweetsperminute.push_back(0);
                             }
 
-                            if (tw) {
+                            if (tw.data->words.size() > 0) {
                                 ++m.tweetsperminute[i];
                             }
                         }
@@ -386,12 +381,28 @@ int main(int argc, const char *argv[])
     reducers.push_back(
         ts |
         onlytweets() |
-        buffer_with_time(milliseconds(1000), poolthread) |
-        rxo::map([=](const vector<shared_ptr<const json>>& tws){
-            return Reducer([=](shared_ptr<Model>& md){
-                auto& m = *md;
-                m.tail->insert(m.tail->end(), tws.begin(), tws.end());
-                m.tail->erase(m.tail->begin(), m.tail->end() - min(1000, int(m.tail->size())));
+        buffer_with_time(milliseconds(200), poolthread) |
+        filter([](const vector<Tweet>& tws){ return !tws.empty(); }) |
+        rxo::map([=](const vector<Tweet>& tws){
+            return Reducer([=](Model& md){
+                auto& m = *(md.data);
+                m.tweets.insert(m.tweets.end(), tws.begin(), tws.end());
+                auto last = m.tweets.empty() ? milliseconds(0) : timestamp_ms(m.tweets.back());
+                auto first = last - (keep + length);
+                auto end = find_if(m.tweets.begin(), m.tweets.end(), [=](const Tweet& tw){
+                    auto t = timestamp_ms(tw);
+                    return t > first;
+                });
+                auto cursor=m.tweets.begin();
+                for (;cursor!=end; ++cursor) {
+                    for (auto& word: cursor->data->words) {
+                        if (--m.allwords[word] == 0)
+                        {
+                            m.allwords.erase(word);
+                        }
+                    }
+                }
+                m.tweets.erase(m.tweets.begin(), end);
                 return std::move(md);
             });
         }) |
@@ -402,12 +413,13 @@ int main(int argc, const char *argv[])
     reducers.push_back(
         ts |
         onlytweets() |
-        window_with_time(milliseconds(1000), poolthread) |
-        rxo::map([](observable<shared_ptr<const json>> source){
+        window_with_time(milliseconds(200), poolthread) |
+        rxo::map([](observable<Tweet> source){
             auto tweetsperminute = source | count() | rxo::map([](int count){
-                return Reducer([=](shared_ptr<Model>& m){
-                    m->total += count;
-                    return std::move(m);
+                return Reducer([=](Model& md){
+                    auto& m = *(md.data);
+                    m.total += count;
+                    return std::move(md);
                 });
             });
             return tweetsperminute;
@@ -427,17 +439,17 @@ int main(int argc, const char *argv[])
 
     auto models = actions |
         // apply things that modify the model
-        scan(make_shared<Model>(), [=](shared_ptr<Model>& m, Reducer& f){
+        scan(Model{}, [=](Model& m, Reducer& f){
             try {
                 auto r = f(m);
-                r->timestamp = mainthread.now();
+                r.data->timestamp = mainthread.now();
                 return r;
             } catch (const std::exception& e) {
                 cerr << e.what() << endl;
                 return std::move(m);
             }
         }) | 
-        start_with(make_shared<Model>()) |
+        start_with(Model{}) |
         // only view model updates every 200ms
         sample_with_time(milliseconds(200), mainthread) |
         publish() |
@@ -447,10 +459,10 @@ int main(int argc, const char *argv[])
 
     auto viewModels = models |
         // if the processing of the model takes too long, skip until caught up
-        filter([=](const shared_ptr<Model>& m){
-            return m->timestamp <= mainthread.now();
+        filter([=](const Model& m){
+            return m.data->timestamp <= mainthread.now();
         }) |
-        rxo::map([](shared_ptr<Model>& m){
+        rxo::map([](Model& m){
             return ViewModel{m};
         }) |
         publish() |
@@ -469,8 +481,7 @@ int main(int argc, const char *argv[])
                 terminate();
             }
 
-            auto& m = *vm.m;
-            auto& words = vm.words;
+            auto& m = *vm.m.data;
 
             static ImGuiTextFilter wordfilter;
 
@@ -518,7 +529,7 @@ int main(int argc, const char *argv[])
                 // by group
                 if (ImGui::CollapsingHeader("Tweets Per Minute (grouped by timestamp_ms)", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
                 {
-                    auto& tpm = vm.groupedtpm;
+                    auto& tpm = vm.data->groupedtpm;
 
                     if (!m.groupedtweets.empty()) {
                         ImGui::Text("%s -> %s", 
@@ -547,50 +558,49 @@ int main(int argc, const char *argv[])
                     ImGui::End();
                 });
 
-                if (idx >= 0 && idx < int(m.groups.size())) {
-                    auto& window = m.groups.at(idx);
-                    auto& group = m.groupedtweets.at(window);
+                ImGui::RadioButton("Selected", &model::scope, scope_selected); ImGui::SameLine();
+                ImGui::RadioButton("All", &model::scope, scope_all);
 
-                    ImGui::Text("%s -> %s", utctextfrom(duration_cast<seconds>(window.begin)).c_str(), utctextfrom(duration_cast<seconds>(window.end)).c_str());
+                ImGui::Text("%s -> %s", vm.data->scope_begin.c_str(), vm.data->scope_end.c_str());
 
-                    {
-                        ImGui::Columns(2);
-                        RXCPP_UNWIND_AUTO([](){
-                            ImGui::Columns(1);
-                        });
-                        ImGui::Text("Tweets: %ld", group->tweets.size()); ImGui::NextColumn();
-                        ImGui::Text("Words : %ld", group->words.size());
-                    }
+                {
+                    ImGui::Columns(2);
+                    RXCPP_UNWIND_AUTO([](){
+                        ImGui::Columns(1);
+                    });
+                    ImGui::Text("Tweets: %ld", vm.data->scope_tweets->size()); ImGui::NextColumn();
+                    ImGui::Text("Words : %ld", vm.data->scope_words->size());
+                }
 
-                    wordfilter.Draw();
-                    
-                    static vector<WordCount> top;
-                    top.clear();
-                    top = words |
-                        ranges::view::filter([&](const WordCount& w){ return wordfilter.PassFilter(w.word.c_str()); }) |
-                        ranges::view::take(10);
+                wordfilter.Draw();
+                
+                static vector<WordCount> top;
+                top.clear();
+                top = *vm.data->scope_words |
+                    ranges::view::filter([&](const WordCount& w){ return wordfilter.PassFilter(w.word.c_str()); }) |
+                    ranges::view::take(10);
 
-                    float maxCount = 0.0f;
-                    for(auto& w : m.groups) {
-                        auto& g = m.groupedtweets.at(w);
-                        auto end = g->words.end();
-                        for(auto& word : top) {
-                            auto wrd = g->words.find(word.word);
-                            float count = 0.0f;
-                            if (wrd != end) {
-                                count = static_cast<float>(wrd->second);
-                            }
-                            maxCount = count > maxCount ? count : maxCount;
-                            word.all.push_back(count);
+                float maxCount = 0.0f;
+                for(auto& w : m.groups) {
+                    auto& g = m.groupedtweets.at(w);
+                    auto end = g->words.end();
+                    for(auto& word : top) {
+                        auto wrd = g->words.find(word.word);
+                        float count = 0.0f;
+                        if (wrd != end) {
+                            count = static_cast<float>(wrd->second);
                         }
-                    }
-
-                    for (auto& w : top) {
-                        ImGui::Text("%d - %s", w.count, w.word.c_str());
-                        ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
-                        ImGui::PlotLines("", &w.all[0], w.all.size(), 0, nullptr, 0.0f, maxCount, plotextent);
+                        maxCount = count > maxCount ? count : maxCount;
+                        word.all.push_back(count);
                     }
                 }
+
+                for (auto& w : top) {
+                    ImGui::Text("%d - %s", w.count, w.word.c_str());
+                    ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
+                    ImGui::PlotLines("", &w.all[0], w.all.size(), 0, nullptr, 0.0f, maxCount, plotextent);
+                }
+
                 End.dismiss();
             }
             ImGui::End();
@@ -631,8 +641,8 @@ int main(int argc, const char *argv[])
                 mt19937 source;
 
                 auto maxCount = 0;
-                auto cursor = words.begin();
-                auto end = words.end();
+                auto cursor = vm.data->scope_words->begin();
+                auto end = vm.data->scope_words->end();
                 for(;cursor != end; ++cursor) {
                     if (!wordfilter.PassFilter(cursor->word.c_str())) continue;
 
@@ -681,27 +691,23 @@ int main(int argc, const char *argv[])
 
                 filter.Draw();
 
-                if (idx >= 0 && idx < int(m.groups.size())) {
-                    auto& window = m.groups.at(idx);
-                    auto& group = m.groupedtweets.at(window);
-
-                    auto cursor = group->tweets.rbegin();
-                    auto end = group->tweets.rend();
-                    for(int remaining = 50;cursor != end && remaining > 0; ++cursor) {
-                        auto& tweet = **cursor;
-                        if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
-                            auto name = tweet["user"]["name"].get<string>();
-                            auto screenName = tweet["user"]["screen_name"].get<string>();
-                            auto text = tweettext(tweet);
-                            if (filter.PassFilter(name.c_str()) || filter.PassFilter(screenName.c_str()) || filter.PassFilter(text.c_str())) {
-                                --remaining;
-                                ImGui::Separator();
-                                ImGui::Text("%s (@%s)", name.c_str() , screenName.c_str() );
-                                ImGui::TextWrapped("%s", text.c_str());
-                            }
+                auto cursor = vm.data->scope_tweets->rbegin();
+                auto end = vm.data->scope_tweets->rend();
+                for(int remaining = 50;cursor != end && remaining > 0; ++cursor) {
+                    auto& tweet = cursor->data->tweet;
+                    if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
+                        auto name = tweet["user"]["name"].get<string>();
+                        auto screenName = tweet["user"]["screen_name"].get<string>();
+                        auto text = tweettext(tweet);
+                        if (filter.PassFilter(name.c_str()) || filter.PassFilter(screenName.c_str()) || filter.PassFilter(text.c_str())) {
+                            --remaining;
+                            ImGui::Separator();
+                            ImGui::Text("%s (@%s)", name.c_str() , screenName.c_str() );
+                            ImGui::TextWrapped("%s", text.c_str());
                         }
                     }
                 }
+
                 End.dismiss();
             }
             ImGui::End();
@@ -719,7 +725,7 @@ int main(int argc, const char *argv[])
                 terminate();
             }
 
-            auto& m = *vm.m;
+            auto& m = *vm.m.data;
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Recent Tweets")) {
@@ -730,23 +736,25 @@ int main(int argc, const char *argv[])
                 ImGui::TextWrapped("url: %s", URL.c_str());
                 ImGui::Text("Total Tweets: %d", m.total);
 
-                if (!m.tail->empty()) {
+                if (!m.tweets.empty()) {
                     // smoothly scroll through tweets.
+
+                    auto& front = m.tweets.front().data->tweet;
 
                     static auto remove = 0.0f;
                     static auto ratio = 1.0f;
-                    static auto oldestid = (*m.tail->front())["id_str"].is_string() ? (*m.tail->front())["id_str"].get<string>() : string{};
+                    static auto oldestid = front["id_str"].is_string() ? front["id_str"].get<string>() : string{};
 
                     // find first tweet to display
-                    auto cursor = m.tail->rbegin();
-                    auto end = m.tail->rend();
-                    cursor = find_if(cursor, end, [&](const shared_ptr<const json>& tw){
-                        auto& tweet = *tw;
+                    auto cursor = m.tweets.rbegin();
+                    auto end = m.tweets.rend();
+                    cursor = find_if(cursor, end, [&](const Tweet& tw){
+                        auto& tweet = tw.data->tweet;
                         auto id = tweet["id_str"].is_string() ? tweet["id_str"].get<string>() : string{};
                         return id == oldestid;
                     });
 
-                    auto remaining = cursor - m.tail->rbegin();
+                    auto remaining = cursor - m.tweets.rbegin();
 
                     // scale display speed from 1 new tweet a frame to zero new tweets per frame
                     ratio = float(remaining) / 50;
@@ -756,14 +764,14 @@ int main(int argc, const char *argv[])
                     if (count == 0) {
                         // reset top tweet after discontinuity
                         remove = 0.0f;
-                        oldestid = (*m.tail->front())["id_str"].is_string() ? (*m.tail->front())["id_str"].get<string>() : string{};
+                        oldestid = front["id_str"].is_string() ? front["id_str"].get<string>() : string{};
                     } else if (remove > .999f) {
                         // reset to display next tweet
                         auto it = cursor;
-                        while (remove > .999f && (end - it) < int(m.tail->size()) ) {
+                        while (remove > .999f && (end - it) < int(m.tweets.size()) ) {
                             remove -= 1.0f;
                             --it;
-                            oldestid = (**(it))["id_str"].is_string() ? (**(it))["id_str"].get<string>() : string{};
+                            oldestid = it->data->tweet["id_str"].is_string() ? it->data->tweet["id_str"].get<string>() : string{};
                         }
                         remove = 0.0f;
                     }
@@ -782,7 +790,7 @@ int main(int argc, const char *argv[])
 
                     // display tweets
                     for(;cursor != end; ++cursor) {
-                        auto& tweet = **cursor;
+                        auto& tweet = cursor->data->tweet;
                         if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
                             ImGui::Separator();
                             ImGui::Text("%s (@%s)", tweet["user"]["name"].get<string>().c_str() , tweet["user"]["screen_name"].get<string>().c_str() );
