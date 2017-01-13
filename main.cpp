@@ -108,9 +108,30 @@ inline void updategroups(
     }
 }
 
+json settings;
+
 int main(int argc, const char *argv[])
 {
     // ==== Parse args
+
+    auto command = string{};
+    for(auto cursor=argv,end=argv+argc; cursor!=end; ++cursor) {
+        command += string{*cursor};
+    }
+
+    cerr << "command = " << command.c_str() << endl;
+
+    auto exefile = string{argv[0]};
+    
+    cerr << "exe = " << exefile.c_str() << endl;
+
+    auto exedir = exefile.substr(0, exefile.find_last_of('/'));
+
+    cerr << "dir = " << exedir.c_str() << endl;
+
+    auto exeparent = exedir.substr(0, exedir.find_last_of('/'));
+
+    cerr << "parent = " << exeparent.c_str() << endl;
 
     auto selector = string{tolower(argc > 1 ? argv[1] : "")};
 
@@ -120,10 +141,40 @@ int main(int argc, const char *argv[])
     bool dumpjson = argc == 7 && selector == "dumpjson";
     bool dumptext = argc == 7 && selector == "dumptext";
 
+    string inifile = exeparent + "/Resources/imgui.ini";
+
+    cerr << "dir = " << exedir.c_str() << endl;
+    
+    bool setting = false;
+    string settingsFile = exedir + "/settings.json";
+
+    if (argc == 2 && ifstream(argv[1]).good()) {
+        setting = true;
+        settingsFile = argv[1];
+    } else if (!playback && argc == 3 && selector == "setting") {
+        setting = true;
+        settingsFile = argv[2];
+    } else if (argc == 1 || argc == 2) {
+        setting = true;
+    } 
+
+    if (setting) {
+
+        cerr << "settings = " << settingsFile.c_str() << endl;
+
+        ifstream i(settingsFile);
+        if (i.good()) {
+            i >> settings;
+        }
+    }
+
     if (!playback &&
         !dumptext &&
         !dumpjson &&
-        !gui) {
+        !gui &&
+        !setting) {
+        printf("twitter <settings file path>\n");
+        printf("twitter SETTING <settings file path>\n");
         printf("twitter PLAYBACK <json file path>\n");
         printf("twitter DUMPJSON <CONS_KEY> <CONS_SECRET> <ATOK_KEY> <ATOK_SECRET> [sample.json | filter.json?track=<topic>]\n");
         printf("twitter DUMPTEXT <CONS_KEY> <CONS_SECRET> <ATOK_KEY> <ATOK_SECRET> [sample.json | filter.json?track=<topic>]\n");
@@ -135,18 +186,82 @@ int main(int argc, const char *argv[])
     if (gui) {
         argoffset = 0;
     }
-    
-    // ==== Twitter keys
-    const char *CONS_KEY = argv[1 + argoffset];
-    const char *CONS_SEC = argv[2 + argoffset];
-    const char *ATOK_KEY = argv[3 + argoffset];
-    const char *ATOK_SEC = argv[4 + argoffset];
+
+    if (settings.count("Keep") == 0) {
+        settings["Keep"] = keep.count();
+    } else {
+        keep = minutes(settings["Keep"].get<int>());
+    }
+
+    if (settings.count("Query") == 0) {
+        settings["Query"] = json::parse(R"({"Action": "sample"})");
+    }
+
+    if (settings.count("WordFilter") == 0) {
+        settings["WordFilter"] = "-http,-expletive";
+    }
+
+    if (settings.count("TweetFilter") == 0) {
+        settings["TweetFilter"] = "";
+    }
+
+    if (settings.count("Language") == 0) {
+        settings["Language"] = "en";
+    }
+
+    if (settings.count("ConsumerKey") == 0) {
+        settings["ConsumerKey"] = string{};
+    }
+    if (settings.count("ConsumerSecret") == 0) {
+        settings["ConsumerSecret"] = string{};
+    }
+    if (settings.count("AccessTokenKey") == 0) {
+        settings["AccessTokenKey"] = string{};
+    }
+    if (settings.count("AccessTokenSecret") == 0) {
+        settings["AccessTokenSecret"] = string{};
+    }
+    if (settings.count("SentimentUrl") == 0) {
+        settings["SentimentUrl"] = string{};
+    }
+    if (settings.count("SentimentKey") == 0) {
+        settings["SentimentKey"] = string{};
+    }
 
     // ==== Constants - paths
     string URL = "https://stream.twitter.com/1.1/statuses/";
     string filepath;
     if (!playback) {
-        URL += argv[5 + argoffset];
+        if (!setting) {
+            // read from args
+
+            URL += argv[5 + argoffset];
+
+            // ==== Twitter keys
+            const char *CONS_KEY = argv[1 + argoffset];
+            const char *CONS_SEC = argv[2 + argoffset];
+            const char *ATOK_KEY = argv[3 + argoffset];
+            const char *ATOK_SEC = argv[4 + argoffset];
+
+            settings["ConsumerKey"] = string(CONS_KEY);
+            settings["ConsumerSecret"] = string(CONS_SEC);
+            settings["AccessTokenKey"] = string(ATOK_KEY);
+            settings["AccessTokenSecret"] = string(ATOK_SEC);
+
+            ofstream o(settingsFile);
+            o << setw(4) << settings;
+        } else {
+            URL += settings["Query"]["Action"].get<std::string>() + ".json?";
+            if (settings.count("Language") > 0) {
+                URL += "language=" + settings["Language"].get<std::string>() + "&";
+            }
+            if (settings["Query"].count("Keywords") > 0 && settings["Query"]["Keywords"].is_array()) {
+                URL += "track=";
+                for (auto& kw : settings["Query"]["Keywords"]) {
+                    URL += kw.get<std::string>() + ",";
+                }
+            }
+        }
         cerr << "url = " << URL.c_str() << endl;
     } else {
         filepath = argv[1 + argoffset];
@@ -181,9 +296,14 @@ int main(int argc, const char *argv[])
     // Setup ImGui binding
     ImGui_ImplSdlGL3_Init(window);
 
-    // Setup Fonts
 
     ImGuiIO& io = ImGui::GetIO();
+
+    io.IniFilename = inifile.c_str();
+
+    // Setup Fonts
+
+    int fontsadded = 0;
 
     static const ImWchar noto[] = { 
         0x0020, 0x0513,
@@ -192,7 +312,13 @@ int main(int argc, const char *argv[])
         0xfb01, 0xfb04,
         0xfeff, 0xfffd, 
         0 };
-    io.Fonts->AddFontFromFileTTF("./NotoMono-Regular.ttf", 13.0f, nullptr, noto);
+    if (ifstream(exedir + "/NotoMono-Regular.ttf").good()) {
+        ++fontsadded;
+        io.Fonts->AddFontFromFileTTF((exedir + "/NotoMono-Regular.ttf").c_str(), 13.0f, nullptr, noto);
+    } else if (ifstream(exeparent + "/Resources/NotoMono-Regular.ttf").good()) {
+        ++fontsadded;
+        io.Fonts->AddFontFromFileTTF((exeparent + "/Resources/NotoMono-Regular.ttf").c_str(), 13.0f, nullptr, noto);
+    }
 
     static ImFontConfig config;
     config.MergeMode = true;
@@ -202,9 +328,17 @@ int main(int argc, const char *argv[])
         0x4dc0, 0x4dff, 
         0xa700, 0xa71f, 
         0 };
-    io.Fonts->AddFontFromFileTTF("./NotoSansSymbols-Regular.ttf", 13.0f, &config, symbols);
+    if (ifstream(exedir + "/NotoSansSymbols-Regular.ttf").good()) {
+        ++fontsadded;
+        io.Fonts->AddFontFromFileTTF((exedir + "/NotoSansSymbols-Regular.ttf").c_str(), 13.0f, &config, symbols);
+    } else if (ifstream(exeparent + "/Resources/NotoSansSymbols-Regular.ttf").good()) {
+        ++fontsadded;
+        io.Fonts->AddFontFromFileTTF((exeparent + "/Resources/NotoSansSymbols-Regular.ttf").c_str(), 13.0f, &config, symbols);
+    }
 
-    io.Fonts->Build();
+    if (fontsadded) {
+        io.Fonts->Build();
+    }
 
     // Cleanup
     RXCPP_UNWIND_AUTO([&](){
@@ -232,7 +366,7 @@ int main(int argc, const char *argv[])
     if (playback) {
         chunks = filechunks(tweetthread, filepath);
     } else {
-        chunks = twitterrequest(tweetthread, factory, URL, method, CONS_KEY, CONS_SEC, ATOK_KEY, ATOK_SEC);
+        chunks = twitterrequest(tweetthread, factory, URL, method, settings["ConsumerKey"], settings["ConsumerSecret"], settings["AccessTokenKey"], settings["AccessTokenSecret"]);
     }
 
     // parse tweets
@@ -297,6 +431,35 @@ int main(int argc, const char *argv[])
             nooponerror() |
             start_with(noop));
     }
+
+    reducers.push_back(
+        ts |
+        onlytweets() |
+        buffer_with_time(milliseconds(500), tweetthread) |
+        filter([](const vector<Tweet>& tws){ return !tws.empty(); }) |
+        rxo::map([=](const vector<Tweet>& tws) -> observable<Reducer> {
+            vector<string> text = tws | 
+                ranges::view::transform([](Tweet tw){
+                    auto& tweet = tw.data->tweet;
+                    return tweettext(tweet);
+                });
+            return sentimentrequest(poolthread, factory, settings["SentimentUrl"].get<string>(), settings["SentimentKey"].get<string>(), text) |
+                rxo::map([=](const string& body){
+                    auto response = json::parse(body);
+                    return Reducer([=](Model& m){
+                        auto combined = ranges::view::zip(response["Results"]["output1"], tws);
+                        for (const auto& b : combined) {
+                            auto sentiment = get<0>(b);
+                            auto tweet = get<1>(b).data->tweet;
+                            m.data->sentiment[tweet["id_str"]] = sentiment["Sentiment"];
+                        }
+                        return std::move(m);
+                    });
+                });
+        }) |
+        merge(poolthread) |
+        nooponerror() |
+        start_with(noop));
 
     // group tweets, that arrive, by the timestamp_ms value
     reducers.push_back(
@@ -395,6 +558,7 @@ int main(int argc, const char *argv[])
                 });
                 auto cursor=m.tweets.begin();
                 for (;cursor!=end; ++cursor) {
+                    m.sentiment.erase(cursor->data->tweet["id_str"].get<string>());
                     for (auto& word: cursor->data->words) {
                         if (--m.allwords[word] == 0)
                         {
@@ -449,7 +613,6 @@ int main(int argc, const char *argv[])
                 return std::move(m);
             }
         }) | 
-        start_with(Model{}) |
         // only view model updates every 200ms
         sample_with_time(milliseconds(200), mainthread) |
         publish() |
@@ -462,6 +625,7 @@ int main(int argc, const char *argv[])
         filter([=](const Model& m){
             return m.data->timestamp <= mainthread.now();
         }) |
+        start_with(Model{}) |
         rxo::map([](Model& m){
             return ViewModel{m};
         }) |
@@ -483,7 +647,7 @@ int main(int argc, const char *argv[])
 
             auto& m = *vm.m.data;
 
-            static ImGuiTextFilter wordfilter;
+            static ImGuiTextFilter wordfilter(settings["WordFilter"].get<string>().c_str());
 
             ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Live Analysis")) {
@@ -505,9 +669,93 @@ int main(int argc, const char *argv[])
 
                 if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
                 {
+                    bool changed = false;
+
+                    ImGui::Text("%s", settingsFile.c_str());
+
+                    if (ImGui::CollapsingHeader("Keys"))
+                    {
+                        static bool showkeys = false;
+                        int textflags = ImGuiInputTextFlags_CharsNoBlank;
+                        if (!showkeys) {
+                            if (ImGui::Button("Show Keys")) {
+                                showkeys = true;
+                            } else {
+                                textflags |= ImGuiInputTextFlags_Password;
+                            }
+                        } else {
+                            if (ImGui::Button("Hide Keys")) {
+                                showkeys = false;
+                            }
+                        }
+
+                        static string ckey(settings.count("ConsumerKey") > 0 ? settings["ConsumerKey"].get<string>() : string{});
+                        ckey.reserve(128);
+                        if (ImGui::InputText("Consumer Key", &ckey[0], ckey.capacity(), textflags)) {
+                            ckey.resize(strlen(&ckey[0]));
+                            settings["ConsumerKey"] = ckey;
+                            changed = true;
+                        }
+
+                        static string csecret(settings.count("ConsumerSecret") > 0 ? settings["ConsumerSecret"].get<string>() : string{});
+                        csecret.reserve(128);
+                        if (ImGui::InputText("Consumer Secret", &csecret[0], csecret.capacity(), textflags)) {
+                            csecret.resize(strlen(&csecret[0]));
+                            settings["ConsumerSecret"] = csecret;
+                            changed = true;
+                        }
+
+                        static string atkey(settings.count("AccessTokenKey") > 0 ? settings["AccessTokenKey"].get<string>() : string{});
+                        atkey.reserve(128);
+                        if (ImGui::InputText("Access Token Key", &atkey[0], atkey.capacity(), textflags)){
+                            atkey.resize(strlen(&atkey[0]));
+                            settings["AccessTokenKey"] = atkey;
+                            changed = true;
+                        }
+
+                        static string atsecret(settings.count("AccessTokenSecret") > 0 ? settings["AccessTokenSecret"].get<string>() : string{});
+                        atsecret.reserve(128);
+                        if (ImGui::InputText("Access Token Secret", &atsecret[0], atsecret.capacity(), textflags)) {
+                            atsecret.resize(strlen(&atsecret[0]));
+                            settings["AccessTokenSecret"] = atsecret;
+                            changed = true;
+                        }
+
+                        static string sentimenturl(settings.count("SentimentUrl") > 0 ? settings["SentimentUrl"].get<string>() : string{});
+                        sentimenturl.reserve(1024);
+                        if (ImGui::InputText("Sentiment Url", &sentimenturl[0], sentimenturl.capacity())) {
+                            sentimenturl.resize(strlen(&sentimenturl[0]));
+                            settings["SentimentUrl"] = sentimenturl;
+                            changed = true;
+                        }
+
+                        static string sentimentkey(settings.count("SentimentKey") > 0 ? settings["SentimentKey"].get<string>() : string{});
+                        sentimentkey.reserve(1024);
+                        if (ImGui::InputText("Sentiment Key", &sentimentkey[0], sentimentkey.capacity(), textflags)) {
+                            sentimentkey.resize(strlen(&sentimentkey[0]));
+                            settings["SentimentKey"] = sentimentkey;
+                            changed = true;
+                        }
+                    }
+
                     static int minutestokeep = keep.count();
                     ImGui::InputInt("minutes to keep", &minutestokeep);
+                    changed |= keep.count() != minutestokeep;
                     keep = minutes(minutestokeep);
+                    settings["Keep"] = keep.count();
+
+                    static string language(settings.count("Language") > 0 ? settings["Language"].get<string>() : string{});
+                    language.reserve(64);
+                    if (ImGui::InputText("Language", &language[0], language.capacity())) {
+                        language.resize(strlen(&language[0]));
+                        settings["Language"] = language;
+                        changed = true;
+                    }
+
+                    if (changed) {
+                        ofstream o(settingsFile);
+                        o << setw(4) << settings;
+                    }
                 }
 
                 // by window
@@ -573,6 +821,12 @@ int main(int argc, const char *argv[])
                 }
 
                 wordfilter.Draw();
+
+                if (settings["WordFilter"].get<string>() != wordfilter.InputBuf) {
+                    settings["WordFilter"] = string{wordfilter.InputBuf};
+                    ofstream o(settingsFile);
+                    o << setw(4) << settings;
+                }
                 
                 static vector<WordCount> top;
                 top.clear();
@@ -687,9 +941,31 @@ int main(int argc, const char *argv[])
                     ImGui::End();
                 });
 
-                static ImGuiTextFilter filter;
+                static const ImVec4 neutralcolor = ImGui::GetStyle().Colors[ImGuiCol_Text];
+                static ImVec4 positivecolor = ImColor(50, 230, 50);
+                static ImVec4 negativecolor = ImColor(240, 33, 33);
+                if (ImGui::BeginPopupContextWindow())
+                {
+                    RXCPP_UNWIND_AUTO([](){
+                        ImGui::EndPopup();
+                    });
+
+                    ImGui::ColorEdit3("positivecolor", reinterpret_cast<float*>(&positivecolor));
+                    ImGui::ColorEdit3("negativecolor", reinterpret_cast<float*>(&negativecolor));
+
+                    if (ImGui::Button("Close"))
+                        ImGui::CloseCurrentPopup();
+                }
+
+                static ImGuiTextFilter filter(settings["TweetFilter"].get<string>().c_str());
 
                 filter.Draw();
+
+                if (settings["TweetFilter"].get<string>() != filter.InputBuf) {
+                    settings["TweetFilter"] = string{filter.InputBuf};
+                    ofstream o(settingsFile);
+                    o << setw(4) << settings;
+                }
 
                 auto cursor = vm.data->scope_tweets->rbegin();
                 auto end = vm.data->scope_tweets->rend();
@@ -698,11 +974,14 @@ int main(int argc, const char *argv[])
                     if (tweet["user"]["name"].is_string() && tweet["user"]["screen_name"].is_string()) {
                         auto name = tweet["user"]["name"].get<string>();
                         auto screenName = tweet["user"]["screen_name"].get<string>();
+                        auto sentiment = m.sentiment[tweet["id_str"]];
+                        auto color = sentiment == "positive" ? positivecolor : sentiment == "negative" ? negativecolor : neutralcolor;
                         auto text = tweettext(tweet);
                         if (filter.PassFilter(name.c_str()) || filter.PassFilter(screenName.c_str()) || filter.PassFilter(text.c_str())) {
                             --remaining;
                             ImGui::Separator();
-                            ImGui::Text("%s (@%s)", name.c_str() , screenName.c_str() );
+                            ImGui::Text("%s (@%s) - ", name.c_str() , screenName.c_str() ); ImGui::SameLine();
+                            ImGui::TextColored(color, "%s", sentiment.c_str());
                             ImGui::TextWrapped("%s", text.c_str());
                         }
                     }

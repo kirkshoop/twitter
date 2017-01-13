@@ -102,6 +102,7 @@ struct Model
         deque<int> tweetsperminute;
         deque<Tweet> tweets;
         WordCountMap allwords;
+        std::map<string, string> sentiment;
     };
     shared_ptr<shared> data = make_shared<shared>();
 };
@@ -147,6 +148,8 @@ struct ViewModel
         auto& model = *m.data;
 
         if (scope == scope_selected && idx >= 0 && idx < int(model.groups.size())) {
+            assert(model.groups.size() <= model.groupedtweets.size());
+            
             auto& window = model.groups.at(idx);
             auto& group = model.groupedtweets.at(window);
 

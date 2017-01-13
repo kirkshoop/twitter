@@ -64,27 +64,48 @@ set(SAMPLE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui_demo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui_impl_sdl_gl3.cpp
 )
-add_executable(${SAMPLE_PROJECT} ${SAMPLE_SOURCES})
-add_executable(rxcpp::examples::${SAMPLE_PROJECT} ALIAS ${SAMPLE_PROJECT})
+
+# define the resources
+set(SAMPLE_RESOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/imgui.ini
+    ${CMAKE_CURRENT_SOURCE_DIR}/NotoMono-Regular.ttf
+    ${CMAKE_CURRENT_SOURCE_DIR}/NotoSansSymbols-Regular.ttf
+)
+
+add_executable(${SAMPLE_PROJECT} ${SAMPLE_SOURCES} ${SAMPLE_RESOURCES})
+
 target_compile_options(${SAMPLE_PROJECT} PUBLIC ${SHARED_COMPILE_OPTIONS})
 target_compile_features(${SAMPLE_PROJECT} PUBLIC ${SHARED_COMPILE_FEATURES})
-target_include_directories(${SAMPLE_PROJECT} PUBLIC ${rxcpp_INCLUDE_DIR} ${range-v3_INCLUDE_DIR} ${LIBOAUTH_INCLUDE_DIRS} ${CURL_INCLUDE_DIRS} ${OPENGL_INCLUDE_DIRS} ${SDL2_INCLUDE_DIRS} ${GLEW_INCLUDE_DIRS} ${JSON_INCLUDE_DIRS})
-target_link_libraries(${SAMPLE_PROJECT} ${CMAKE_THREAD_LIBS_INIT} ${LIBOAUTH_LIBRARY} ${CURL_LIBRARIES} ${OPENGL_LIBRARIES} ${SDL2_LIBRARIES} ${GLEW_LIBRARIES})
 
-add_custom_command(TARGET ${SAMPLE_PROJECT} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_SOURCE_DIR}/NotoMono-Regular.ttf
-        ${CMAKE_CURRENT_BINARY_DIR}/NotoMono-Regular.ttf )
-add_custom_command(TARGET ${SAMPLE_PROJECT} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_SOURCE_DIR}/NotoSansSymbols-Regular.ttf
-        ${CMAKE_CURRENT_BINARY_DIR}/NotoSansSymbols-Regular.ttf )
+target_include_directories(${SAMPLE_PROJECT} PUBLIC 
+    ${rxcpp_INCLUDE_DIR} 
+    ${range-v3_INCLUDE_DIR} 
+    ${LIBOAUTH_INCLUDE_DIRS} 
+    ${CURL_INCLUDE_DIRS} 
+    ${OPENGL_INCLUDE_DIRS} 
+    ${SDL2_INCLUDE_DIRS} 
+    ${GLEW_INCLUDE_DIRS} 
+    ${JSON_INCLUDE_DIRS})
+
+target_link_libraries(${SAMPLE_PROJECT} 
+    ${CMAKE_THREAD_LIBS_INIT} 
+    ${LIBOAUTH_LIBRARY} 
+    ${CURL_LIBRARIES} 
+    ${OPENGL_LIBRARIES} 
+    ${SDL2_LIBRARIES} 
+    ${GLEW_LIBRARIES})
+
+set_target_properties(${SAMPLE_PROJECT} PROPERTIES MACOSX_BUNDLE TRUE)
+set_target_properties(${SAMPLE_PROJECT} PROPERTIES MACOSX_BUNDLE_BUNDLE_NAME TwitterAnalysis)
+set_target_properties(${SAMPLE_PROJECT} PROPERTIES MACOSX_BUNDLE_COPYRIGHT "Copyright 2017 Kirk Shoop")
+
+set_source_files_properties(${SAMPLE_RESOURCES} PROPERTIES 
+    HEADER_FILE_ONLY ON
+    MACOSX_PACKAGE_LOCATION Resources)
 
 # configure unit tests via CTest
 enable_testing()
 set(CTEST_CONFIGURATION_TYPE "${JOB_BUILD_CONFIGURATION}")
-
-set_target_properties(${SAMPLE_PROJECT} PROPERTIES FOLDER "Examples")
 
 add_test(NAME RunTests
      WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"

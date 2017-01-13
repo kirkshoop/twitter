@@ -21,7 +21,7 @@ struct rxcurl_state
                         int remaining = 0;
                         message = curl_multi_info_read(curlm, &remaining);
                         out.on_next(message);
-                        if (remaining > 0) {
+                        if (!!message && remaining > 0) {
                             continue;
                         }
                         break;
@@ -51,6 +51,8 @@ struct http_request
 {
     string url;
     string method;
+    std::map<string, string> headers;
+    string body;
 };
 struct http_state
 {
@@ -58,19 +60,23 @@ struct http_state
         if (!!curl) {
             // remove on worker thread
             auto localcurl = curl;
+            auto localheaders = headers;
             auto localrxcurl = rxcurl;
+            auto localRequest = request;
             rxcurl->worker
                 .take(1)
                 .tap([=](CURLMsg*){
                     curl_multi_remove_handle(localrxcurl->curlm, localcurl);
                     curl_easy_cleanup(localcurl);
+                    curl_slist_free_all(localheaders);
                 })
                 .subscribe();
 
             curl = nullptr;
+            headers = nullptr;
         }
     }
-    explicit http_state(shared_ptr<rxcurl_state> m, http_request r) : rxcurl(m), request(r), code(CURLE_OK), httpStatus(0), curl(nullptr) {
+    explicit http_state(shared_ptr<rxcurl_state> m, http_request r) : rxcurl(m), request(r), code(CURLE_OK), httpStatus(0), curl(nullptr), headers(nullptr) {
         error.resize(CURL_ERROR_SIZE);
     }
     http_state(const http_state&) = delete;
@@ -85,6 +91,8 @@ struct http_state
     int httpStatus;
     subjects::subject<string> chunkbus;
     CURL* curl;
+    struct curl_slist *headers;
+    vector<string> strings;
 };
 struct http_exception : runtime_error
 {
@@ -146,32 +154,49 @@ struct rxcurl
                 .tap([requestState](const string&){}); // keep connection alive
 
             r.body.complete = r.state->chunkbus.get_observable()
-                .start_with(string{})
                 .tap([requestState](const string&){}) // keep connection alive
+                .start_with(string{})
                 .sum() 
-                .replay(1);
+                .replay(1)
+                .ref_count();
             
             // subscriber must subscribe during the on_next call to receive all marbles
             out.on_next(r);
             out.on_completed();
 
+            auto localState = state;
+
             // start on worker thread
             state->worker
                 .take(1)
-                .tap([=](CURLMsg*){
+                .tap([r, localState](CURLMsg*){
 
                     auto curl = curl_easy_init();
 
+                    auto& request = r.state->request;
+
                     // ==== cURL Setting
-                    curl_easy_setopt(curl, CURLOPT_URL, r.state->request.url.c_str());
+                    curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
 
                     if (request.method == "POST") {
                         // - POST data
                         curl_easy_setopt(curl, CURLOPT_POST, 1L);
                         // - specify the POST data
-                        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
+                        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.body.c_str());
                     }
 
+                    auto& strings = r.state->strings;
+                    auto& headers = r.state->headers;
+                    for (auto& h : request.headers) {
+                        strings.push_back(h.first + ": " + h.second);
+                        headers = curl_slist_append(headers, strings.back().c_str());
+                    }
+
+                    if (!!headers) {
+                        /* set our custom set of headers */ 
+                        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+                    }
+    
                     // - User agent name
                     curl_easy_setopt(curl, CURLOPT_USERAGENT, "rxcpp curl client 1.0");
                     // - HTTP STATUS >=400 ---> ERROR
@@ -185,7 +210,7 @@ struct rxcurl
                     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, &r.state->error[0]); 
 
                     r.state->curl = curl;
-                    curl_multi_add_handle(state->curlm, curl);
+                    curl_multi_add_handle(localState->curlm, curl);
                 })
                 .subscribe();
 
@@ -195,7 +220,8 @@ struct rxcurl
                     return !!message && message->easy_handle == r.state->curl && message->msg == CURLMSG_DONE;
                 })
                 .take(1)
-                .tap([=](CURLMsg* message){
+                .tap([r](CURLMsg* message){
+
                     r.state->error.resize(strlen(&r.state->error[0]));
 
                     auto chunkout = r.state->chunkbus.get_subscriber();
