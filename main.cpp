@@ -452,6 +452,10 @@ int main(int argc, const char *argv[])
                             auto sentiment = get<0>(b);
                             auto tweet = get<1>(b).data->tweet;
                             m.data->sentiment[tweet["id_str"]] = sentiment["Sentiment"];
+                            for (auto& word: get<1>(b).data->words) {
+                                sentiment["Sentiment"] == "negative" && ++m.data->negativewords[word];
+                                sentiment["Sentiment"] == "positive" && ++m.data->positivewords[word];
+                            }
                         }
                         return std::move(m);
                     });
@@ -558,11 +562,20 @@ int main(int argc, const char *argv[])
                 });
                 auto cursor=m.tweets.begin();
                 for (;cursor!=end; ++cursor) {
+                    auto sentiment = m.sentiment[cursor->data->tweet["id_str"].get<string>()];
                     m.sentiment.erase(cursor->data->tweet["id_str"].get<string>());
                     for (auto& word: cursor->data->words) {
                         if (--m.allwords[word] == 0)
                         {
                             m.allwords.erase(word);
+                        }
+                        if (sentiment == "negative" && --m.negativewords[word] == 0)
+                        {
+                            m.negativewords.erase(word);
+                        }
+                        if (sentiment == "positive" && --m.positivewords[word] == 0)
+                        {
+                            m.positivewords.erase(word);
                         }
                     }
                 }
@@ -800,6 +813,10 @@ int main(int argc, const char *argv[])
             }
             ImGui::End();
 
+            static ImVec4 neutralcolor = ImColor(250, 150, 0);
+            static ImVec4 positivecolor = ImColor(50, 230, 50);
+            static ImVec4 negativecolor = ImColor(240, 33, 33);
+
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Top Words from group")) {
                 RXCPP_UNWIND(End, [](){
@@ -807,6 +824,8 @@ int main(int argc, const char *argv[])
                 });
 
                 ImGui::RadioButton("Selected", &model::scope, scope_selected); ImGui::SameLine();
+                ImGui::RadioButton("All -", &model::scope, scope_all_negative); ImGui::SameLine();
+                ImGui::RadioButton("All +", &model::scope, scope_all_positive); ImGui::SameLine();
                 ImGui::RadioButton("All", &model::scope, scope_all);
 
                 ImGui::Text("%s -> %s", vm.data->scope_begin.c_str(), vm.data->scope_end.c_str());
@@ -850,7 +869,19 @@ int main(int argc, const char *argv[])
                 }
 
                 for (auto& w : top) {
-                    ImGui::Text("%d - %s", w.count, w.word.c_str());
+
+                    ImGui::Text("%4.d,", model::scope == scope_selected ? w.count : m.allwords[w.word]); ImGui::SameLine();
+                    auto positive = m.positivewords[w.word];
+                    ImGui::TextColored(positivecolor, " +%4.d,", positive); ImGui::SameLine();
+                    auto negative = m.negativewords[w.word];
+                    ImGui::TextColored(negativecolor, " -%4.d", negative); ImGui::SameLine();
+                    if (negative > positive) {
+                        ImGui::TextColored(negativecolor, " -%6.2fx", negative / std::max(float(positive), 0.001f)); ImGui::SameLine();
+                    } else {
+                        ImGui::TextColored(positivecolor, " +%6.2fx", positive / std::max(float(negative), 0.001f)); ImGui::SameLine();
+                    }
+                    ImGui::Text(" - %s", w.word.c_str());
+
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
                     ImGui::PlotLines("", &w.all[0], w.all.size(), 0, nullptr, 0.0f, maxCount, plotextent);
                 }
@@ -941,9 +972,6 @@ int main(int argc, const char *argv[])
                     ImGui::End();
                 });
 
-                static const ImVec4 neutralcolor = ImGui::GetStyle().Colors[ImGuiCol_Text];
-                static ImVec4 positivecolor = ImColor(50, 230, 50);
-                static ImVec4 negativecolor = ImColor(240, 33, 33);
                 if (ImGui::BeginPopupContextWindow())
                 {
                     RXCPP_UNWIND_AUTO([](){
@@ -951,6 +979,7 @@ int main(int argc, const char *argv[])
                     });
 
                     ImGui::ColorEdit3("positivecolor", reinterpret_cast<float*>(&positivecolor));
+                    ImGui::ColorEdit3("neutralcolor", reinterpret_cast<float*>(&neutralcolor));
                     ImGui::ColorEdit3("negativecolor", reinterpret_cast<float*>(&negativecolor));
 
                     if (ImGui::Button("Close"))
@@ -977,7 +1006,8 @@ int main(int argc, const char *argv[])
                         auto sentiment = m.sentiment[tweet["id_str"]];
                         auto color = sentiment == "positive" ? positivecolor : sentiment == "negative" ? negativecolor : neutralcolor;
                         auto text = tweettext(tweet);
-                        if (filter.PassFilter(name.c_str()) || filter.PassFilter(screenName.c_str()) || filter.PassFilter(text.c_str())) {
+                        auto passSentiment = model::scope == scope_all_negative ? sentiment == "negative" : model::scope == scope_all_positive ? sentiment == "positive" : true;
+                        if (passSentiment && (filter.PassFilter(name.c_str()) || filter.PassFilter(screenName.c_str()) || filter.PassFilter(text.c_str()))) {
                             --remaining;
                             ImGui::Separator();
                             ImGui::Text("%s (@%s) - ", name.c_str() , screenName.c_str() ); ImGui::SameLine();

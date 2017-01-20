@@ -208,13 +208,45 @@ auto twitterrequest = [](observe_on_one_worker tweetthread, ::rxcurl::rxcurl fac
             url = signedurl;
         }
 
-        return factory.create(http_request{url, method}) |
+        return factory.create(http_request{url, method, {}, {}}) |
             rxo::map([](http_response r){
                 return r.body.chunks;
             }) |
             merge(tweetthread);
     }) |
-    twitter_stream_reconnection(tweetthread);
+    twitter_stream_reconnection(tweetthread) | 
+    subscribe_on(tweetthread);
+};
+
+auto sentimentrequest = [](observe_on_one_worker worker, ::rxcurl::rxcurl factory, string url, string key, vector<string> text) -> observable<string> {
+
+    std::map<string, string> headers;
+    headers["Content-Type"] = "application/json";
+    headers["Authorization"] = "Bearer " + key;
+
+    auto body = json::parse(R"({"Inputs":{"input1":[]},"GlobalParameters":{}})");
+
+    static const regex nonascii(R"([^A-Za-z0-9])");
+
+    auto& input1 = body["Inputs"]["input1"];
+    for(auto& t : text) {
+
+        auto ascii = regex_replace(t, nonascii, " ");
+
+        input1.push_back({{"tweet_text", ascii}});
+    }
+
+    return observable<>::defer([=]() -> observable<string> {
+        return factory.create(http_request{url, "POST", headers, body.dump()}) |
+            rxo::map([](http_response r){
+                return r.body.complete;
+            }) |
+            merge(worker) |
+            tap([=](exception_ptr){
+                cout << body << endl;
+            });
+    }) |
+    subscribe_on(worker);
 };
 
 

@@ -102,6 +102,8 @@ struct Model
         deque<int> tweetsperminute;
         deque<Tweet> tweets;
         WordCountMap allwords;
+        WordCountMap positivewords;
+        WordCountMap negativewords;
         std::map<string, string> sentiment;
     };
     shared_ptr<shared> data = make_shared<shared>();
@@ -138,7 +140,9 @@ struct WordCount
 int idx = 0;
 
 const int scope_all = 1;
-const int scope_selected = 2;
+const int scope_all_negative = 2;
+const int scope_all_positive = 3;
+const int scope_selected = 4;
 static int scope = scope_selected;
 
 struct ViewModel
@@ -169,20 +173,44 @@ struct ViewModel
                 });
         } else {
 
-            data->scope_words = &data->allwords;
+            if (scope == scope_all_negative) {
+                data->scope_words = &data->negativewords;
+                data->negativewords = model.negativewords |
+                    ranges::view::transform([&](const pair<string, int>& word){
+                        return WordCount{word.first, word.second, {}};
+                    });
+
+                data->negativewords |=
+                    ranges::action::sort([](const WordCount& l, const WordCount& r){
+                        return l.count > r.count;
+                    });
+            } else if (scope == scope_all_positive) {
+                data->scope_words = &data->positivewords;
+                data->positivewords = model.positivewords |
+                    ranges::view::transform([&](const pair<string, int>& word){
+                        return WordCount{word.first, word.second, {}};
+                    });
+
+                data->positivewords |=
+                    ranges::action::sort([](const WordCount& l, const WordCount& r){
+                        return l.count > r.count;
+                    });
+            } else {
+                data->scope_words = &data->allwords;
+                data->allwords = model.allwords |
+                    ranges::view::transform([&](const pair<string, int>& word){
+                        return WordCount{word.first, word.second, {}};
+                    });
+
+                data->allwords |=
+                    ranges::action::sort([](const WordCount& l, const WordCount& r){
+                        return l.count > r.count;
+                    });
+            }
+
             data->scope_tweets = &model.tweets;
             data->scope_begin = model.groups.empty() ? string{} : utctextfrom(duration_cast<seconds>(model.groups.front().begin));
             data->scope_end = model.groups.empty() ? string{} : utctextfrom(duration_cast<seconds>(model.groups.back().end));
-
-            data->allwords = model.allwords |
-                ranges::view::transform([&](const pair<string, int>& word){
-                    return WordCount{word.first, word.second, {}};
-                });
-
-            data->allwords |=
-                ranges::action::sort([](const WordCount& l, const WordCount& r){
-                    return l.count > r.count;
-                });
         }
 
         {
@@ -209,6 +237,8 @@ struct ViewModel
     {
         vector<WordCount> words;
         vector<WordCount> allwords;
+        vector<WordCount> negativewords;
+        vector<WordCount> positivewords;
         vector<float> groupedtpm;
 
         string scope_begin = {};
