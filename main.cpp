@@ -386,17 +386,50 @@ int main(int argc, const char *argv[])
 
     vector<observable<Reducer>> reducers;
 
+    auto newJsonFile = [exedir]() -> unique_ptr<ofstream> {
+        return unique_ptr<ofstream>{new ofstream(exedir + "/" + to_string(time_point_cast<milliseconds>(system_clock::now()).time_since_epoch().count()) + ".json")};
+    };
+
+    auto jsonfile = newJsonFile();
+
+    auto dumpjsonchanged = interval(every, tweetthread) |
+        rxo::map([&](long){return dumpjson;}) |
+        distinct_until_changed() |
+        publish() |
+        ref_count();
+
+
+    auto delayed_tweets = ts |
+        buffer_with_time(every, tweetthread) |
+        delay(length, tweetthread) |
+        publish() |
+        connect_forever();
+
     // dump json to cout
     reducers.push_back(
-        ts |
-        filter([&](const Tweet&){
-            return dumpjson;
+        dumpjsonchanged |
+        filter([](bool dj){ return dj; }) |
+        rxo::map([&](bool) -> observable<Reducer> {
+            return delayed_tweets | 
+                take_until(
+                    dumpjsonchanged | 
+                    filter([](bool dj){ return !dj; }) | 
+                    delay(length, tweetthread)) |
+                rxo::map([&](const vector<Tweet>& tws){
+                    return Reducer([&, tws](Model& m){
+                        for (auto& tw: tws) {
+                            auto& tweet = tw.data->tweet;
+                            auto json = tweet.dump();
+                            cout << json << "\r\n";
+                            *jsonfile << json << "\r\n";
+                        }
+                        *jsonfile << flush;
+                        return std::move(m);
+                    });
+                });
         }) |
-        tap([=](const Tweet& tw){
-            auto& tweet = tw.data->tweet;
-            cout << tweet << "\r\n";
-        }) |
-        noopandignore() |
+        switch_on_next(tweetthread) |
+        nooponerror() |
         start_with(noop));
 
     // dump text to cout
@@ -1117,7 +1150,7 @@ int main(int argc, const char *argv[])
     renderers.push_back(
         frames |
         with_latest_from(rxu::take_at<1>(), viewModels) |
-        tap([=, &dumptext, &dumpjson](const ViewModel&){
+        tap([=, &jsonfile, &dumptext, &dumpjson](const ViewModel&){
             auto renderthreadid = this_thread::get_id();
             if (mainthreadid != renderthreadid) {
                 cerr << "render on wrong thread!" << endl;
@@ -1135,6 +1168,9 @@ int main(int argc, const char *argv[])
                 ImGui::RadioButton("Text", &dumpmode, 1); ImGui::SameLine();
                 ImGui::RadioButton("Json", &dumpmode, 2);
                 dumptext = dumpmode == 1;
+                if (!dumpjson && dumpmode == 2) {
+                    jsonfile = newJsonFile();
+                }
                 dumpjson = dumpmode == 2;
 
                 End.dismiss();
