@@ -55,8 +55,18 @@ inline auto parsetweets(observe_on_one_worker worker, observe_on_one_worker twee
                 return shard | 
                     observe_on(worker) | 
                     rxo::map([](const string& line){
-                        return Tweet(json::parse(line));
+                        auto tweet = json::parse(line);
+                        vector<Tweet> tweets;
+                        tweets.push_back(Tweet(tweet));
+                        if (!!tweet.count("quoted_status")) {
+                            tweets.push_back(Tweet(tweet["quoted_status"]));
+                        }
+                        if (!!tweet.count("retweeted_status")) {
+                            tweets.push_back(Tweet(tweet["retweeted_status"]));
+                        }
+                        return iterate(tweets);
                     }) |
+                    merge() |
                     as_dynamic();
             }) |
             merge(tweetthread);
@@ -139,7 +149,6 @@ auto filechunks = [](observe_on_one_worker tweetthread, string filepath) {
             self();
         };
 
-        //controller.schedule_periodically(controller.now(), milliseconds(100), coordinator.act(producer));
         controller.schedule(coordinator.act(producer));
     });
 };

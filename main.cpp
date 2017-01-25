@@ -60,24 +60,14 @@ const auto length = milliseconds(60000);
 const auto every = milliseconds(5000);
 auto keep = minutes(10);
 
-inline void updategroups(
-    Model& model,
-    milliseconds timestamp, 
-    Tweet tw = Tweet(), 
-    const vector<string>& words = vector<string>{}) {
+template<class F>
+inline void updategroups(Model& model, milliseconds timestamp, milliseconds window, F&& f) {
 
     auto& md = model.data;
 
-    for (auto& word: words) {
-        ++md->allwords[word];
-    }
-
     auto& m = *md;
 
-    auto searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - length);
-    if (words.size() > 0) {
-        searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - keep);
-    }
+    auto searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - window);
     auto searchend = timestamp;
     auto offset = milliseconds(0);
     for (;searchbegin+offset < searchend;offset += duration_cast<milliseconds>(every)){
@@ -90,14 +80,8 @@ inline void updategroups(
             it = m.groupedtweets.insert(make_pair(key, make_shared<TweetGroup>())).first;
         }
 
-        if (words.size() > 0) {
-            if (searchbegin+offset <= timestamp && timestamp < searchbegin+offset+length) {
-                it->second->tweets.push_back(tw);
-
-                for (auto& word: words) {
-                    ++it->second->words[word];
-                }
-            }
+        if (searchbegin+offset <= timestamp && timestamp < searchbegin+offset+length) {
+            f(*it->second);
         }
     }
 
@@ -457,7 +441,7 @@ int main(int argc, const char *argv[])
             rxo::map([=](long){
                 return Reducer([=](Model& m){
                     auto rangebegin = time_point_cast<milliseconds>(system_clock::now()).time_since_epoch();
-                    updategroups(m, rangebegin);
+                    updategroups(m, rangebegin, keep, [](TweetGroup&){});
                     return std::move(m);
                 });
             }) |
@@ -484,11 +468,21 @@ int main(int argc, const char *argv[])
                         for (const auto& b : combined) {
                             auto sentiment = get<0>(b);
                             auto tweet = get<1>(b).data->tweet;
+                            auto ts = timestamp_ms(get<1>(b));
+                            bool isNeg = sentiment["Sentiment"] == "negative";
+                            bool isPos = sentiment["Sentiment"] == "positive";
+
                             m.data->sentiment[tweet["id_str"]] = sentiment["Sentiment"];
+
                             for (auto& word: get<1>(b).data->words) {
-                                sentiment["Sentiment"] == "negative" && ++m.data->negativewords[word];
-                                sentiment["Sentiment"] == "positive" && ++m.data->positivewords[word];
+                                isNeg && ++m.data->negativewords[word];
+                                isPos && ++m.data->positivewords[word];
                             }
+
+                            updategroups(m, ts, length, [&](TweetGroup& tg){
+                                isNeg && ++tg.negative;
+                                isPos && ++tg.positive;
+                            });
                         }
                         return std::move(m);
                     });
@@ -513,7 +507,17 @@ int main(int argc, const char *argv[])
             return Reducer([=](Model& m){
                 auto t = timestamp_ms(tw);
 
-                updategroups(m, t, tw, words);
+                for (auto& word: words) {
+                    ++m.data->allwords[word];
+                }
+
+                updategroups(m, t, length, [&](TweetGroup& tg){
+                    tg.tweets.push_back(tw);
+
+                    for (auto& word: words) {
+                        ++tg.words[word];
+                    }
+                });
 
                 return std::move(m);
             });
@@ -695,6 +699,10 @@ int main(int argc, const char *argv[])
 
             static ImGuiTextFilter wordfilter(settings["WordFilter"].get<string>().c_str());
 
+            static ImVec4 neutralcolor = ImColor(250, 150, 0);
+            static ImVec4 positivecolor = ImColor(50, 230, 50);
+            static ImVec4 negativecolor = ImColor(240, 33, 33);
+
             ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Live Analysis")) {
                 RXCPP_UNWIND(End, [](){
@@ -821,6 +829,25 @@ int main(int argc, const char *argv[])
                 }
 
                 // by group
+
+                if (ImGui::CollapsingHeader("Negative Tweets Per Minute", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    auto& tpm = vm.data->negativetpm;
+                    ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
+                    ImGui::PushStyleColor(ImGuiCol_PlotLines, negativecolor);
+                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, vm.data->maxtpm, plotextent);
+                    ImGui::PopStyleColor(1);
+                }
+
+                if (ImGui::CollapsingHeader("Positive Tweets Per Minute", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    auto& tpm = vm.data->positivetpm;
+                    ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
+                    ImGui::PushStyleColor(ImGuiCol_PlotLines, positivecolor);
+                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, vm.data->maxtpm, plotextent);
+                    ImGui::PopStyleColor(1);
+                }
+
                 if (ImGui::CollapsingHeader("Tweets Per Minute (grouped by timestamp_ms)", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
                 {
                     auto& tpm = vm.data->groupedtpm;
@@ -832,7 +859,7 @@ int main(int argc, const char *argv[])
                     }
                     ImVec2 plotposition = ImGui::GetCursorScreenPos();
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
-                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, fltmax, plotextent);
+                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, vm.data->maxtpm, plotextent);
                     if (tpm.size() == m.groups.size() && ImGui::IsItemHovered()) {
                         const float t = Clamp((ImGui::GetMousePos().x - plotposition.x) / plotextent.x, 0.0f, 0.9999f);
                         idx = (int)(t * (m.groups.size() - 1));
@@ -845,10 +872,6 @@ int main(int argc, const char *argv[])
                 End.dismiss();
             }
             ImGui::End();
-
-            static ImVec4 neutralcolor = ImColor(250, 150, 0);
-            static ImVec4 positivecolor = ImColor(50, 230, 50);
-            static ImVec4 negativecolor = ImColor(240, 33, 33);
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Top Words from group")) {

@@ -62,19 +62,19 @@ bool operator<(const TimeRange& lhs, const TimeRange& rhs){
     return lhs.begin < rhs.begin && lhs.end < rhs.end;
 }
 
-using WordCountMap = std::unordered_map<string, int>;
+using WordCountMap = unordered_map<string, int>;
 
 struct Tweet
 {
     Tweet() {}
-    explicit Tweet(json&& tweet) 
-        : data(make_shared<shared>(shared{move(tweet)})) 
+    explicit Tweet(const json& tweet) 
+        : data(make_shared<shared>(shared{tweet})) 
     {}
     struct shared 
     {
         shared() {}
-        explicit shared(json&& t) 
-            : tweet(move(t))
+        explicit shared(const json& t) 
+            : tweet(t)
             , words(splitwords(tweettext(tweet)))
         {}
         json tweet;
@@ -87,6 +87,8 @@ struct TweetGroup
 {
     deque<Tweet> tweets;
     WordCountMap words;
+    int positive = 0;
+    int negative = 0;
 };
 
 
@@ -104,7 +106,7 @@ struct Model
         WordCountMap allwords;
         WordCountMap positivewords;
         WordCountMap negativewords;
-        std::map<string, string> sentiment;
+        unordered_map<string, string> sentiment;
     };
     shared_ptr<shared> data = make_shared<shared>();
 };
@@ -228,6 +230,42 @@ struct ViewModel
                 ranges::view::transform([&](const pair<milliseconds, float>& group){
                     return group.second;
                 });
+
+            data->maxtpm = data->groupedtpm.size() > 0 ? *ranges::max_element(data->groupedtpm) : 0.0f;
+        }
+
+        {
+            vector<pair<milliseconds, float>> groups = model.groupedtweets |
+                ranges::view::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                    return make_pair(group.first.begin, static_cast<float>(group.second->positive));
+                });
+
+            groups |=
+                ranges::action::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
+                    return l.first < r.first;
+                });
+
+            data->positivetpm = groups |
+                ranges::view::transform([&](const pair<milliseconds, float>& group){
+                    return group.second;
+                });
+        }
+
+        {
+            vector<pair<milliseconds, float>> groups = model.groupedtweets |
+                ranges::view::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                    return make_pair(group.first.begin, static_cast<float>(group.second->negative));
+                });
+
+            groups |=
+                ranges::action::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
+                    return l.first < r.first;
+                });
+
+            data->negativetpm = groups |
+                ranges::view::transform([&](const pair<milliseconds, float>& group){
+                    return group.second;
+                });
         }
     }
 
@@ -239,7 +277,11 @@ struct ViewModel
         vector<WordCount> allwords;
         vector<WordCount> negativewords;
         vector<WordCount> positivewords;
+
         vector<float> groupedtpm;
+        vector<float> positivetpm;
+        vector<float> negativetpm;
+        float maxtpm = 0.0f;
 
         string scope_begin = {};
         string scope_end = {};
