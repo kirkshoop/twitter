@@ -384,6 +384,7 @@ int main(int argc, const char *argv[])
      */
     auto poolthread = observe_on_event_loop();
 
+    // Create a factory that returns observable of http responses from Twitter
     auto factory = create_rxcurl();
 
     composite_subscription lifetime;
@@ -414,8 +415,18 @@ int main(int argc, const char *argv[])
 
     // ==== Model
 
+    /* Reducer is a function that takes Model and returns new Model. The operation of taking a sequence of something
+       and aggregating that sequence into single instance of something, is traditionally called reduce.
+       In STL traditionally term "accumulate" is used; other languages use term "fold" for similar operation.
+       Each reducer here represents a mini-pipeline that listens for incomming data of interest and calculates
+       result from them.
+
+       Definition of reduce in Rx:
+         http://reactivex.io/documentation/operators/reduce.html 
+    */
     vector<observable<Reducer>> reducers;
 
+    // Create new ofstream with current time epoch as filename
     auto newJsonFile = [exedir]() -> unique_ptr<ofstream> {
         return unique_ptr<ofstream>{new ofstream(exedir + "/" + to_string(time_point_cast<milliseconds>(system_clock::now()).time_since_epoch().count()) + ".json")};
     };
