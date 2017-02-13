@@ -342,7 +342,8 @@ int main(int argc, const char *argv[])
         io.Fonts->Build();
     }
 
-    // Cleanup
+    // Define deinitialization procedure that is called when something in RxCpp finishes
+    // TODO: When exactly RXCPP_UNWIND_AUTO is called and why to use it?
     RXCPP_UNWIND_AUTO([&](){
         ImGui_ImplSdlGL3_Shutdown();
         SDL_GL_DeleteContext(glcontext);
@@ -350,10 +351,37 @@ int main(int argc, const char *argv[])
         SDL_Quit();
     });
 
+    /* In Rx concurrency model is defined by scheduling. To specify, which thread on_next() calls are
+       made on, observe_on_xxx functions are used in RxCpp. These function return 'coordination' factories.
+       
+       General explanation of schedulers in Rx:
+         http://reactivex.io/documentation/scheduler.html
+       Detailed explanation of ObserveOn (C#):
+         http://www.introtorx.com/Content/v1.0.10621.0/15_SchedulingAndThreading.html#SubscribeOnObserveOn
+       Details on coordination and how scheduling is implemented in RxCpp:
+         https://github.com/Reactive-Extensions/RxCpp/blob/master/DeveloperManual.md
+       More on scheduling design in RxCpp:
+         https://github.com/Reactive-Extensions/RxCpp/issues/105#issuecomment-87294867
+         https://github.com/Reactive-Extensions/RxCpp/issues/9
+    */
     auto mainthreadid = this_thread::get_id();
+    /* Create coordination for observing on UI thread
+       Variable rl is defined in rximgui.h
+    
+       More info on observe_on_run_loop:
+         https://github.com/Reactive-Extensions/RxCpp/issues/151
+         https://github.com/Reactive-Extensions/RxCpp/pull/154
+    */
     auto mainthread = observe_on_run_loop(rl);
 
+    /* Thread to download tweets from Twitter and perform initial parsing
+       Example of observe_on_new_thread with explanation:
+         http://rxcpp.codeplex.com/discussions/620779
+     */
     auto tweetthread = observe_on_new_thread();
+    /* "The event_loop scheduler is a simple round-robin fixed-size thread pool."
+          http://rxcpp.codeplex.com/discussions/635113
+     */
     auto poolthread = observe_on_event_loop();
 
     auto factory = create_rxcurl();
