@@ -57,9 +57,13 @@ using namespace tweets;
 const ImVec4 clear_color = ImColor(114, 144, 154);
 
 const auto length = milliseconds(60000);
+// Time granularity for periodicity of tweet groups
 const auto every = milliseconds(5000);
+// For how long the tweet groups should be retained
 auto keep = minutes(10);
 
+// Create tweet groups for the period from 'timestamp'-'windows' till 'timestamp' and
+// delete the ones that are too old to keep
 template<class F>
 inline void updategroups(Model& model, milliseconds timestamp, milliseconds window, F&& f) {
 
@@ -67,24 +71,38 @@ inline void updategroups(Model& model, milliseconds timestamp, milliseconds wind
 
     auto& m = *md;
 
+    // We are interested in tweets no older than 'window' milliseconds from 'timestamp' ...
     auto searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - window);
+    // ... and not newer than 'timestamp'
     auto searchend = timestamp;
+    // Counter variable for the loop
+    // TODO: Why is it initialized outside of 'for' construct?
     auto offset = milliseconds(0);
     for (;searchbegin+offset < searchend;offset += duration_cast<milliseconds>(every)){
+        // Calculate current time period
         auto key = TimeRange{searchbegin+offset, searchbegin+offset+length};
         auto it = m.groupedtweets.find(key);
+        // If the current time period does not exist in the groups yet
         if (it == m.groupedtweets.end()) {
-            // add group
+            // Append current group's period to deque of groups in the model
             m.groups.push_back(key);
+            // Ensure the group deque is sorted
             m.groups |= ranges::action::sort(less<TimeRange>{});
+            // Create a tweet group for the current period and insert it into the map
             it = m.groupedtweets.insert(make_pair(key, make_shared<TweetGroup>())).first;
         }
 
+        // Regardless of whether the group already existed or not, apply f function
+        // to tweet group.
+        // TODO: The first condition is always true due to 'for' construct's stop condition?
+        // TODO: 'timestamp' here probably should be replaced with 'searchend' for consistency
+        // TODO: What is the second condition for?
         if (searchbegin+offset <= timestamp && timestamp < searchbegin+offset+length) {
             f(*it->second);
         }
     }
 
+    // Drop tweet groups that are older than the period for which tweet groups should be retained
     while(!m.groups.empty() && m.groups.front().begin + keep < m.groups.back().begin) {
         // remove group
         m.groupedtweets.erase(m.groups.front());
