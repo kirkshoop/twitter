@@ -403,6 +403,29 @@ int main(int argc, const char *argv[])
     // parse tweets
     auto tweets = chunks | parsetweets(poolthread, tweetthread);
 
+    /* Take tweets, make sure that any error is ignored, and publish them
+       as a stream of observables available to multiple on-demand subscribers.
+
+       If an error is encountered, function on_error_resume_next ensures the error
+       item is replaced with some correct observable value. In our case we return
+       an empty Tweet.
+       Publish creates a connectable observable that can be subscribed to later and that
+       starts operating when a consumer requests it
+       ref_count provides interface to connectable observable to consumers that
+       take ordinary observable. It also keeps the track, how many consumers are
+       connected to the observable, hence the name.
+       Repeat repeats the input given number of times. In our case we repeat it 0
+       times meaning that we return an empty sequence.
+
+       OnErrorResumeNext:
+         https://github.com/ReactiveX/RxJava/wiki/Error-Handling-Operators
+       Publish:
+         http://reactivex.io/documentation/operators/publish.html
+       RefCount:
+         http://reactivex.io/documentation/operators/refcount.html
+       Detailed explanation on Publish and RefCount (C#):
+         http://www.introtorx.com/content/v1.0.10621.0/14_HotAndColdObservables.html
+     */
     // share tweets
     auto ts = tweets |
         on_error_resume_next([](std::exception_ptr ep){
@@ -433,30 +456,21 @@ int main(int argc, const char *argv[])
     // The json dump file is created always
     auto jsonfile = newJsonFile();
 
-    /* Generate a stream of booleans when the json dumping is changed.
+    /* Generate a stream of booleans when the json dumping setting is changed.
        Function interval emits incremented long value with time granularity
        specified by 'every' with 'tweetthread' scheduler.
        Function map converts each long value into bool value equal to
        current state of dumpjson variable.
        Function distinct_until_changed replaces groups of equal items in the
        stream that go together with single item, thus filtering repeated values
-       Publish creates a connectable observable that can be subscribed to later and that
-       starts operating when a consumer requests it
-       ref_count provides interface to connectable observable to consumers that
-       take ordinary observable. It also keeps the track, how many consumers are
-       connected to the observable, thus the name.
        
        Interval:
          http://reactivex.io/documentation/operators/interval.html
          http://www.introtorx.com/content/v1.0.10621.0/04_CreatingObservableSequences.html#ObservableInterval
+       Map:
+         http://reactivex.io/documentation/operators/map.html
        DistinctUntilChanged:
          http://www.introtorx.com/content/v1.0.10621.0/05_Filtering.html#Distinct
-       Publish:
-         http://reactivex.io/documentation/operators/publish.html
-       RefCount:
-         http://reactivex.io/documentation/operators/refcount.html
-       Detailed explanation on Publish and RefCount (C#):
-         http://www.introtorx.com/content/v1.0.10621.0/14_HotAndColdObservables.html
      */
     auto dumpjsonchanged = interval(every, tweetthread) |
         rxo::map([&](long){return dumpjson;}) |
@@ -464,7 +478,10 @@ int main(int argc, const char *argv[])
         publish() |
         ref_count();
 
-
+    /*
+      Detailed explanation of buffering with time:
+        http://www.introtorx.com/content/v1.0.10621.0/17_SequencesOfCoincidence.html
+    */
     auto delayed_tweets = ts |
         buffer_with_time(every, tweetthread) |
         delay(length, tweetthread) |
