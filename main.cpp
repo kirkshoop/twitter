@@ -419,20 +419,45 @@ int main(int argc, const char *argv[])
        and aggregating that sequence into single instance of something, is traditionally called reduce.
        In STL traditionally term "accumulate" is used; other languages use term "fold" for similar operation.
        Each reducer here represents a mini-pipeline that listens for incomming data of interest and calculates
-       result from them.
+       result from them and/or produce side effect.
 
        Definition of reduce in Rx:
          http://reactivex.io/documentation/operators/reduce.html 
     */
     vector<observable<Reducer>> reducers;
 
-    // Create new ofstream with current time epoch as filename
+    // Create new ofstream with current time epoch as filename. Twits will be dumped there, if the JSON dump mode is activated
     auto newJsonFile = [exedir]() -> unique_ptr<ofstream> {
         return unique_ptr<ofstream>{new ofstream(exedir + "/" + to_string(time_point_cast<milliseconds>(system_clock::now()).time_since_epoch().count()) + ".json")};
     };
-
+    // The json dump file is created always
     auto jsonfile = newJsonFile();
 
+    /* Generate a stream of booleans when the json dumping is changed.
+       Function interval emits incremented long value with time granularity
+       specified by 'every' with 'tweetthread' scheduler.
+       Function map converts each long value into bool value equal to
+       current state of dumpjson variable.
+       Function distinct_until_changed replaces groups of equal items in the
+       stream that go together with single item, thus filtering repeated values
+       Publish creates a connectable observable that can be subscribed to later and that
+       starts operating when a consumer requests it
+       ref_count provides interface to connectable observable to consumers that
+       take ordinary observable. It also keeps the track, how many consumers are
+       connected to the observable, thus the name.
+       
+       Interval:
+         http://reactivex.io/documentation/operators/interval.html
+         http://www.introtorx.com/content/v1.0.10621.0/04_CreatingObservableSequences.html#ObservableInterval
+       DistinctUntilChanged:
+         http://www.introtorx.com/content/v1.0.10621.0/05_Filtering.html#Distinct
+       Publish:
+         http://reactivex.io/documentation/operators/publish.html
+       RefCount:
+         http://reactivex.io/documentation/operators/refcount.html
+       Detailed explanation on Publish and RefCount (C#):
+         http://www.introtorx.com/content/v1.0.10621.0/14_HotAndColdObservables.html
+     */
     auto dumpjsonchanged = interval(every, tweetthread) |
         rxo::map([&](long){return dumpjson;}) |
         distinct_until_changed() |
