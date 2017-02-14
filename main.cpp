@@ -415,7 +415,7 @@ int main(int argc, const char *argv[])
        take ordinary observable. It also keeps the track, how many consumers are
        connected to the observable, hence the name.
        Repeat repeats the input given number of times. In our case we repeat it 0
-       times meaning that we return an empty sequence.
+       times meaning that we return an empty sequence (?)
 
        OnErrorResumeNext:
          https://github.com/ReactiveX/RxJava/wiki/Error-Handling-Operators
@@ -426,6 +426,7 @@ int main(int argc, const char *argv[])
        Detailed explanation on Publish and RefCount (C#):
          http://www.introtorx.com/content/v1.0.10621.0/14_HotAndColdObservables.html
      */
+    // TODO: More explanation on repeat(0) is needed
     // share tweets
     auto ts = tweets |
         on_error_resume_next([](std::exception_ptr ep){
@@ -478,9 +479,14 @@ int main(int argc, const char *argv[])
         publish() |
         ref_count();
 
-    /*
-      Detailed explanation of buffering with time:
-        http://www.introtorx.com/content/v1.0.10621.0/17_SequencesOfCoincidence.html
+    /* Process tweets grouped by packs arrived during 'every' time granularity,
+       delaying emission by 'length' time
+       "publish and connect_forever ensure that the work is done even if nothing subscribes the result'
+         (http://kirkshoop.github.io/2013/09/05/deferoperation.html)
+       Detailed explanation of buffering with time:
+         http://www.introtorx.com/content/v1.0.10621.0/17_SequencesOfCoincidence.html
+       Delay:
+         http://reactivex.io/documentation/operators/delay.html
     */
     auto delayed_tweets = ts |
         buffer_with_time(every, tweetthread) |
