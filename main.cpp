@@ -93,7 +93,7 @@ inline void updategroups(Model& model, milliseconds timestamp, milliseconds wind
 
         // Regardless of whether the group already existed or not, apply f function
         // to tweet group.
-        // TODO: Try to remove the condition, as it is an artefact from previous revisions
+        // TODO: Try to remove the condition as it is an artefact from previous revisions
         if (searchbegin+offset <= timestamp && timestamp < searchbegin+offset+length) {
             f(*it->second);
         }
@@ -339,8 +339,13 @@ int main(int argc, const char *argv[])
         io.Fonts->Build();
     }
 
-    // Define deinitialization procedure that is called when something in RxCpp finishes
-    // TODO: When exactly RXCPP_UNWIND_AUTO is called and why to use it?
+    /* Define deinitialization procedure for graphic user interface in a SafeGuard pattern.
+       The closure supplied as the parameter to unwinder macro is run in a destructor of a
+       local var when it goes out of scope.
+
+       More details on Unwinder (SageGuard pattern implementation):
+       http://kirkshoop.github.io/2011/09/27/unwinder-should-be-in-standard-library.html
+     */
     RXCPP_UNWIND_AUTO([&](){
         ImGui_ImplSdlGL3_Shutdown();
         SDL_GL_DeleteContext(glcontext);
@@ -411,8 +416,9 @@ int main(int argc, const char *argv[])
        ref_count provides interface to connectable observable to consumers that
        take ordinary observable. It also keeps the track, how many consumers are
        connected to the observable, hence the name.
-       Repeat repeats the input given number of times. In our case we repeat it 0
-       times meaning that we return an empty sequence (?)
+       Repeat repeats the input given number of times. In RxCpp 0 is a magic
+       value to specify it should be run forever. Note, that this is unlike to
+       other Rx implementations, where 0 means to return an empty sequence
 
        OnErrorResumeNext:
          https://github.com/ReactiveX/RxJava/wiki/Error-Handling-Operators
@@ -423,8 +429,6 @@ int main(int argc, const char *argv[])
        Detailed explanation on Publish and RefCount (C#):
          http://www.introtorx.com/content/v1.0.10621.0/14_HotAndColdObservables.html
      */
-    // TODO: More explanation on repeat(0) is needed
-    // share tweets
     auto ts = tweets |
         on_error_resume_next([](std::exception_ptr ep){
             cerr << rxu::what(ep) << endl;
