@@ -57,9 +57,13 @@ using namespace tweets;
 const ImVec4 clear_color = ImColor(114, 144, 154);
 
 const auto length = milliseconds(60000);
+// Time granularity for periodicity of tweet groups
 const auto every = milliseconds(5000);
+// For how long the tweet groups should be retained
 auto keep = minutes(10);
 
+// Create tweet groups for the period from 'timestamp'-'windows' till 'timestamp' and
+// delete the ones that are too old to keep
 template<class F>
 inline void updategroups(Model& model, milliseconds timestamp, milliseconds window, F&& f) {
 
@@ -67,24 +71,38 @@ inline void updategroups(Model& model, milliseconds timestamp, milliseconds wind
 
     auto& m = *md;
 
+    // We are interested in tweets no older than 'window' milliseconds from 'timestamp' ...
     auto searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - window);
+    // ... and not newer than 'timestamp'
     auto searchend = timestamp;
+    // Counter variable for the loop
+    // TODO: Why is it initialized outside of 'for' construct?
     auto offset = milliseconds(0);
     for (;searchbegin+offset < searchend;offset += duration_cast<milliseconds>(every)){
+        // Calculate current time period
         auto key = TimeRange{searchbegin+offset, searchbegin+offset+length};
         auto it = m.groupedtweets.find(key);
+        // If the current time period does not exist in the groups yet
         if (it == m.groupedtweets.end()) {
-            // add group
+            // Append current group's period to deque of groups in the model
             m.groups.push_back(key);
+            // Ensure the group deque is sorted
             m.groups |= ranges::action::sort(less<TimeRange>{});
+            // Create a tweet group for the current period and insert it into the map
             it = m.groupedtweets.insert(make_pair(key, make_shared<TweetGroup>())).first;
         }
 
+        // Regardless of whether the group already existed or not, apply f function
+        // to tweet group.
+        // TODO: The first condition is always true due to 'for' construct's stop condition?
+        // TODO: 'timestamp' here probably should be replaced with 'searchend' for consistency
+        // TODO: What is the second condition for?
         if (searchbegin+offset <= timestamp && timestamp < searchbegin+offset+length) {
             f(*it->second);
         }
     }
 
+    // Drop tweet groups that are older than the period for which tweet groups should be retained
     while(!m.groups.empty() && m.groups.front().begin + keep < m.groups.back().begin) {
         // remove group
         m.groupedtweets.erase(m.groups.front());
@@ -324,7 +342,8 @@ int main(int argc, const char *argv[])
         io.Fonts->Build();
     }
 
-    // Cleanup
+    // Define deinitialization procedure that is called when something in RxCpp finishes
+    // TODO: When exactly RXCPP_UNWIND_AUTO is called and why to use it?
     RXCPP_UNWIND_AUTO([&](){
         ImGui_ImplSdlGL3_Shutdown();
         SDL_GL_DeleteContext(glcontext);
@@ -332,12 +351,40 @@ int main(int argc, const char *argv[])
         SDL_Quit();
     });
 
+    /* In Rx concurrency model is defined by scheduling. To specify, which thread on_next() calls are
+       made on, observe_on_xxx functions are used in RxCpp. These function return 'coordination' factories.
+       
+       General explanation of schedulers in Rx:
+         http://reactivex.io/documentation/scheduler.html
+       Detailed explanation of ObserveOn (C#):
+         http://www.introtorx.com/Content/v1.0.10621.0/15_SchedulingAndThreading.html#SubscribeOnObserveOn
+       Details on coordination and how scheduling is implemented in RxCpp:
+         https://github.com/Reactive-Extensions/RxCpp/blob/master/DeveloperManual.md
+       More on scheduling design in RxCpp:
+         https://github.com/Reactive-Extensions/RxCpp/issues/105#issuecomment-87294867
+         https://github.com/Reactive-Extensions/RxCpp/issues/9
+    */
     auto mainthreadid = this_thread::get_id();
+    /* Create coordination for observing on UI thread
+       Variable rl is defined in rximgui.h
+    
+       More info on observe_on_run_loop:
+         https://github.com/Reactive-Extensions/RxCpp/issues/151
+         https://github.com/Reactive-Extensions/RxCpp/pull/154
+    */
     auto mainthread = observe_on_run_loop(rl);
 
+    /* Thread to download tweets from Twitter and perform initial parsing
+       Example of observe_on_new_thread with explanation:
+         http://rxcpp.codeplex.com/discussions/620779
+     */
     auto tweetthread = observe_on_new_thread();
+    /* "The event_loop scheduler is a simple round-robin fixed-size thread pool."
+          http://rxcpp.codeplex.com/discussions/635113
+     */
     auto poolthread = observe_on_event_loop();
 
+    // Create a factory that returns observable of http responses from Twitter
     auto factory = create_rxcurl();
 
     composite_subscription lifetime;
@@ -356,6 +403,30 @@ int main(int argc, const char *argv[])
     // parse tweets
     auto tweets = chunks | parsetweets(poolthread, tweetthread);
 
+    /* Take tweets, make sure that any error is ignored, and publish them
+       as a stream of observables available to multiple on-demand subscribers.
+
+       If an error is encountered, function on_error_resume_next ensures the error
+       item is replaced with some correct observable value. In our case we return
+       an empty Tweet.
+       Publish creates a connectable observable that can be subscribed to later and that
+       starts operating when a consumer requests it
+       ref_count provides interface to connectable observable to consumers that
+       take ordinary observable. It also keeps the track, how many consumers are
+       connected to the observable, hence the name.
+       Repeat repeats the input given number of times. In our case we repeat it 0
+       times meaning that we return an empty sequence (?)
+
+       OnErrorResumeNext:
+         https://github.com/ReactiveX/RxJava/wiki/Error-Handling-Operators
+       Publish:
+         http://reactivex.io/documentation/operators/publish.html
+       RefCount:
+         http://reactivex.io/documentation/operators/refcount.html
+       Detailed explanation on Publish and RefCount (C#):
+         http://www.introtorx.com/content/v1.0.10621.0/14_HotAndColdObservables.html
+     */
+    // TODO: More explanation on repeat(0) is needed
     // share tweets
     auto ts = tweets |
         on_error_resume_next([](std::exception_ptr ep){
@@ -368,21 +439,55 @@ int main(int argc, const char *argv[])
 
     // ==== Model
 
+    /* Reducer is a function that takes Model and returns new Model. The operation of taking a sequence of something
+       and aggregating that sequence into single instance of something, is traditionally called reduce.
+       In STL traditionally term "accumulate" is used; other languages use term "fold" for similar operation.
+       Each reducer here represents a mini-pipeline that listens for incomming data of interest and calculates
+       result from them and/or produce side effect.
+
+       Definition of reduce in Rx:
+         http://reactivex.io/documentation/operators/reduce.html 
+    */
     vector<observable<Reducer>> reducers;
 
+    // Create new ofstream with current time epoch as filename. Twits will be dumped there, if the JSON dump mode is activated
     auto newJsonFile = [exedir]() -> unique_ptr<ofstream> {
         return unique_ptr<ofstream>{new ofstream(exedir + "/" + to_string(time_point_cast<milliseconds>(system_clock::now()).time_since_epoch().count()) + ".json")};
     };
-
+    // The json dump file is created always
     auto jsonfile = newJsonFile();
 
+    /* Generate a stream of booleans when the json dumping setting is changed.
+       Function interval emits incremented long value with time granularity
+       specified by 'every' with 'tweetthread' scheduler.
+       Function map converts each long value into bool value equal to
+       current state of dumpjson variable.
+       Function distinct_until_changed replaces groups of equal items in the
+       stream that go together with single item, thus filtering repeated values
+       
+       Interval:
+         http://reactivex.io/documentation/operators/interval.html
+         http://www.introtorx.com/content/v1.0.10621.0/04_CreatingObservableSequences.html#ObservableInterval
+       Map:
+         http://reactivex.io/documentation/operators/map.html
+       DistinctUntilChanged:
+         http://www.introtorx.com/content/v1.0.10621.0/05_Filtering.html#Distinct
+     */
     auto dumpjsonchanged = interval(every, tweetthread) |
         rxo::map([&](long){return dumpjson;}) |
         distinct_until_changed() |
         publish() |
         ref_count();
 
-
+    /* Process tweets grouped by packs arrived during 'every' time granularity,
+       delaying emission by 'length' time
+       "publish and connect_forever ensure that the work is done even if nothing subscribes the result'
+         (http://kirkshoop.github.io/2013/09/05/deferoperation.html)
+       Detailed explanation of buffering with time:
+         http://www.introtorx.com/content/v1.0.10621.0/17_SequencesOfCoincidence.html
+       Delay:
+         http://reactivex.io/documentation/operators/delay.html
+    */
     auto delayed_tweets = ts |
         buffer_with_time(every, tweetthread) |
         delay(length, tweetthread) |
