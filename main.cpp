@@ -93,9 +93,7 @@ inline void updategroups(Model& model, milliseconds timestamp, milliseconds wind
 
         // Regardless of whether the group already existed or not, apply f function
         // to tweet group.
-        // TODO: The first condition is always true due to 'for' construct's stop condition?
-        // TODO: 'timestamp' here probably should be replaced with 'searchend' for consistency
-        // TODO: What is the second condition for?
+        // TODO: Try to remove the condition, as it is an artefact from previous revisions
         if (searchbegin+offset <= timestamp && timestamp < searchbegin+offset+length) {
             f(*it->second);
         }
