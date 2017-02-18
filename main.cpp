@@ -75,10 +75,9 @@ inline void updategroups(Model& model, milliseconds timestamp, milliseconds wind
     auto searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - window);
     // ... and not newer than 'timestamp'
     auto searchend = timestamp;
-    // Counter variable for the loop
-    // TODO: Why is it initialized outside of 'for' construct?
-    auto offset = milliseconds(0);
-    for (;searchbegin+offset < searchend;offset += duration_cast<milliseconds>(every)){
+    for (auto offset = milliseconds(0);
+         searchbegin + offset < searchend;
+         offset += duration_cast<milliseconds>(every)) {
         // Calculate current time period
         auto key = TimeRange{searchbegin+offset, searchbegin+offset+length};
         auto it = m.groupedtweets.find(key);
