@@ -496,7 +496,21 @@ int main(int argc, const char *argv[])
         publish() |
         connect_forever();
 
-    // dump json to cout
+    /* Whenever jsonchanged becomes true, generate an observable that consists of
+       of a sequence of packs of tweets. This sequence should continue only until jsonchanged becomes false,
+       Then such sequence is fed to a reducer that takes tweet data and prints it
+       to stdout.
+
+       Function filter emits only those elements of input sequence for which the supplied
+       predicate is true.
+       Function take_until passes the elements of input sequence forward until the
+       it's argument emits an element of it's own or is terminated.
+
+       Filter:
+         http://reactivex.io/documentation/operators/filter.html
+       TakeUntil:
+         http://reactivex.io/documentation/operators/takeuntil.html
+     */
     reducers.push_back(
         dumpjsonchanged |
         filter([](bool dj){ return dj; }) |
