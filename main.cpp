@@ -418,7 +418,8 @@ int main(int argc, const char *argv[])
        connected to the observable, hence the name.
        Repeat repeats the input given number of times. In RxCpp 0 is a magic
        value to specify it should be run forever. Note, that this is unlike to
-       other Rx implementations, where 0 means to return an empty sequence
+       other Rx implementations, where 0 means to return an empty sequence,
+       and will be changed in a newer version of RxCpp
 
        OnErrorResumeNext:
          https://github.com/ReactiveX/RxJava/wiki/Error-Handling-Operators
