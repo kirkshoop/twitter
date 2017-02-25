@@ -501,15 +501,23 @@ int main(int argc, const char *argv[])
        Then such sequence is fed to a reducer that takes tweet data and prints it
        to stdout.
 
-       Function filter emits only those elements of input sequence for which the supplied
+       filter emits only those elements of input sequence for which the supplied
        predicate is true.
-       Function take_until passes the elements of input sequence forward until the
+       take_until passes the elements of input sequence forward until the
        it's argument emits an element of it's own or is terminated.
+       switch_on_next combines sequences into a single sequence, ignoring all the results
+       that come from sequences that emitted after the first emission of the latest sequence
+       start_with specifies the first element for the sequence to start with
 
        Filter:
          http://reactivex.io/documentation/operators/filter.html
        TakeUntil:
          http://reactivex.io/documentation/operators/takeuntil.html
+       Switch (switch_on_next):
+         http://reactivex.io/documentation/operators/switch.html
+         http://www.introtorx.com/Content/v1.0.10621.0/12_CombiningSequences.html#Switch
+       StartWith:
+         http://reactivex.io/documentation/operators/startwith.html
      */
     reducers.push_back(
         dumpjsonchanged |
