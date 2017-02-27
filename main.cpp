@@ -545,7 +545,13 @@ int main(int argc, const char *argv[])
         nooponerror() |
         start_with(noop));
 
-    // dump text to cout
+    /* Dump text to cout
+       Take tweets, use filter to pass them forward in the chain only if dumptext is true.
+       Tap (do) function lets the programmer listen to sequence and possibly make side-effects on it.
+       Here we listen to each tweet and just print them to stdout
+       
+       Do (aka Tap): http://www.introtorx.com/content/v1.0.10621.0/09_SideEffects.html#Do
+     */
     reducers.push_back(
         ts |
         onlytweets() |
