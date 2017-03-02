@@ -75,10 +75,9 @@ inline void updategroups(Model& model, milliseconds timestamp, milliseconds wind
     auto searchbegin = duration_cast<minutes>(duration_cast<minutes>(timestamp) - window);
     // ... and not newer than 'timestamp'
     auto searchend = timestamp;
-    // Counter variable for the loop
-    // TODO: Why is it initialized outside of 'for' construct?
-    auto offset = milliseconds(0);
-    for (;searchbegin+offset < searchend;offset += duration_cast<milliseconds>(every)){
+    for (auto offset = milliseconds(0);
+         searchbegin + offset < searchend;
+         offset += duration_cast<milliseconds>(every)) {
         // Calculate current time period
         auto key = TimeRange{searchbegin+offset, searchbegin+offset+length};
         auto it = m.groupedtweets.find(key);
@@ -94,9 +93,7 @@ inline void updategroups(Model& model, milliseconds timestamp, milliseconds wind
 
         // Regardless of whether the group already existed or not, apply f function
         // to tweet group.
-        // TODO: The first condition is always true due to 'for' construct's stop condition?
-        // TODO: 'timestamp' here probably should be replaced with 'searchend' for consistency
-        // TODO: What is the second condition for?
+        // TODO: Try to remove the condition as it is an artefact from previous revisions
         if (searchbegin+offset <= timestamp && timestamp < searchbegin+offset+length) {
             f(*it->second);
         }
@@ -342,8 +339,13 @@ int main(int argc, const char *argv[])
         io.Fonts->Build();
     }
 
-    // Define deinitialization procedure that is called when something in RxCpp finishes
-    // TODO: When exactly RXCPP_UNWIND_AUTO is called and why to use it?
+    /* Define deinitialization procedure for graphic user interface in a SafeGuard pattern.
+       The closure supplied as the parameter to unwinder macro is run in a destructor of a
+       local var when it goes out of scope.
+
+       More details on Unwinder (SageGuard pattern implementation):
+       http://kirkshoop.github.io/2011/09/27/unwinder-should-be-in-standard-library.html
+     */
     RXCPP_UNWIND_AUTO([&](){
         ImGui_ImplSdlGL3_Shutdown();
         SDL_GL_DeleteContext(glcontext);
@@ -414,8 +416,10 @@ int main(int argc, const char *argv[])
        ref_count provides interface to connectable observable to consumers that
        take ordinary observable. It also keeps the track, how many consumers are
        connected to the observable, hence the name.
-       Repeat repeats the input given number of times. In our case we repeat it 0
-       times meaning that we return an empty sequence (?)
+       Repeat repeats the input given number of times. In RxCpp 0 is a magic
+       value to specify it should be run forever. Note, that this is unlike to
+       other Rx implementations, where 0 means to return an empty sequence,
+       and will be changed in a newer version of RxCpp
 
        OnErrorResumeNext:
          https://github.com/ReactiveX/RxJava/wiki/Error-Handling-Operators
@@ -426,8 +430,6 @@ int main(int argc, const char *argv[])
        Detailed explanation on Publish and RefCount (C#):
          http://www.introtorx.com/content/v1.0.10621.0/14_HotAndColdObservables.html
      */
-    // TODO: More explanation on repeat(0) is needed
-    // share tweets
     auto ts = tweets |
         on_error_resume_next([](std::exception_ptr ep){
             cerr << rxu::what(ep) << endl;
@@ -494,7 +496,29 @@ int main(int argc, const char *argv[])
         publish() |
         connect_forever();
 
-    // dump json to cout
+    /* Whenever jsonchanged becomes true, generate an observable that consists of
+       of a sequence of packs of tweets. This sequence should continue only until jsonchanged becomes false,
+       Then such sequence is fed to a reducer that takes tweet data and prints it
+       to stdout.
+
+       filter emits only those elements of input sequence for which the supplied
+       predicate is true.
+       take_until passes the elements of input sequence forward until the
+       it's argument emits an element of it's own or is terminated.
+       switch_on_next combines sequences into a single sequence, ignoring all the results
+       that come from sequences that emitted after the first emission of the latest sequence
+       start_with specifies the first element for the sequence to start with
+
+       Filter:
+         http://reactivex.io/documentation/operators/filter.html
+       TakeUntil:
+         http://reactivex.io/documentation/operators/takeuntil.html
+       Switch (switch_on_next):
+         http://reactivex.io/documentation/operators/switch.html
+         http://www.introtorx.com/Content/v1.0.10621.0/12_CombiningSequences.html#Switch
+       StartWith:
+         http://reactivex.io/documentation/operators/startwith.html
+     */
     reducers.push_back(
         dumpjsonchanged |
         filter([](bool dj){ return dj; }) |
@@ -521,7 +545,13 @@ int main(int argc, const char *argv[])
         nooponerror() |
         start_with(noop));
 
-    // dump text to cout
+    /* Dump text to cout
+       Take tweets, use filter to pass them forward in the chain only if dumptext is true.
+       Tap (do) function lets the programmer listen to sequence and possibly make side-effects on it.
+       Here we listen to each tweet and just print them to stdout
+       
+       Do (aka Tap): http://www.introtorx.com/content/v1.0.10621.0/09_SideEffects.html#Do
+     */
     reducers.push_back(
         ts |
         onlytweets() |
