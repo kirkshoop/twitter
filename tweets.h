@@ -56,17 +56,8 @@ inline auto parsetweets(observe_on_one_worker worker, observe_on_one_worker twee
                     observe_on(worker) | 
                     rxo::map([](const string& line){
                         auto tweet = json::parse(line);
-                        vector<Tweet> tweets;
-                        tweets.push_back(Tweet(tweet));
-                        if (!!tweet.count("quoted_status")) {
-                            tweets.push_back(Tweet(tweet["quoted_status"]));
-                        }
-                        if (!!tweet.count("retweeted_status")) {
-                            tweets.push_back(Tweet(tweet["retweeted_status"]));
-                        }
-                        return iterate(tweets);
+                        return Tweet(tweet);
                     }) |
-                    merge() |
                     as_dynamic();
             }) |
             merge(tweetthread);

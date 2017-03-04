@@ -3,6 +3,12 @@
 namespace model {
 
 inline string tweettext(const json& tweet) {
+    if (!!tweet.count("extended_tweet")) {
+        auto ex = tweet["extended_tweet"];
+        if (!!ex.count("full_text") && ex["full_text"].is_string()) {
+            return ex["full_text"];
+        }
+    }
     if (!!tweet.count("text") && tweet["text"].is_string()) {
         return tweet["text"];
     }

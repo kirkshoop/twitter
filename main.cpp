@@ -1067,9 +1067,9 @@ int main(int argc, const char *argv[])
                     auto negative = m.negativewords[w.word];
                     ImGui::TextColored(negativecolor, " -%4.d", negative); ImGui::SameLine();
                     if (negative > positive) {
-                        ImGui::TextColored(negativecolor, " -%6.2fx", negative / std::max(float(positive), 0.001f)); ImGui::SameLine();
+                        ImGui::TextColored(negativecolor, " -%6.2fx", negative / std::max(float(positive), 1.0f)); ImGui::SameLine();
                     } else {
-                        ImGui::TextColored(positivecolor, " +%6.2fx", positive / std::max(float(negative), 0.001f)); ImGui::SameLine();
+                        ImGui::TextColored(positivecolor, " +%6.2fx", positive / std::max(float(negative), 1.0f)); ImGui::SameLine();
                     }
                     ImGui::Text(" - %s", w.word.c_str());
 
