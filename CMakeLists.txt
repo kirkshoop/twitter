@@ -57,10 +57,8 @@ MESSAGE( STATUS "range-v3_INCLUDE_DIRS: " ${range-v3_INCLUDE_DIR} )
 find_package(rxcpp REQUIRED)
 MESSAGE( STATUS "rxcpp_INCLUDE_DIRS: " ${rxcpp_INCLUDE_DIR} )
 
-find_path(JSON_INCLUDE_DIR json.hpp)
-set(JSON_INCLUDE_DIRS ${JSON_INCLUDE_DIR})
-
-MESSAGE( STATUS "JSON_INCLUDE_DIRS: " ${JSON_INCLUDE_DIRS} )
+find_package(jsoncpp REQUIRED)
+MESSAGE( STATUS "jsoncpp_INCLUDE_DIR: " ${jsoncpp_INCLUDE_DIR} )
 
 # define the sources
 set(SAMPLE_SOURCES
@@ -94,7 +92,7 @@ target_include_directories(${SAMPLE_PROJECT} PUBLIC
     ${SDL2_INCLUDE_DIRS} 
     ${SDLMIXER_INCLUDE_DIR} 
     ${GLEW_INCLUDE_DIRS} 
-    ${JSON_INCLUDE_DIRS})
+    ${jsoncpp_INCLUDE_DIR})
 
 target_link_libraries(${SAMPLE_PROJECT} 
     ${CMAKE_THREAD_LIBS_INIT} 

@@ -229,6 +229,8 @@ int main(int argc, const char *argv[])
         settings["SentimentKey"] = string{};
     }
 
+    //cerr << setw(2) << settings << endl;
+
     // ==== Constants - paths
     const string URL = "https://stream.twitter.com/1.1/statuses/";
     string url = URL;
@@ -465,6 +467,14 @@ int main(int argc, const char *argv[])
                 const bool isFilter = url.find("/statuses/filter") != string::npos;
                 string method = isFilter ? "POST" : "GET";
 
+                /*  Create new http request for a stream of tweets
+
+                    If an error is encountered, function on_error_resume_next ensures the error
+                    item is replaced with some correct observable value. 
+                    
+                    In this case return never, which never completes and never emits a value.
+                    The never will be cancelled when the url changes
+                */
                 return twitterrequest(tweetthread, factory, url, method, settings["ConsumerKey"], settings["ConsumerSecret"], settings["AccessTokenKey"], settings["AccessTokenSecret"]) |
                     // handle invalid requests by waiting for a trigger to try again
                     on_error_resume_next([](std::exception_ptr ep){
@@ -491,9 +501,6 @@ int main(int argc, const char *argv[])
     /* Take tweets, make sure that any error is ignored, and publish them
        as a stream of observables available to multiple on-demand subscribers.
 
-       If an error is encountered, function on_error_resume_next ensures the error
-       item is replaced with some correct observable value. In our case we return
-       an empty Tweet.
        Publish creates a connectable observable that can be subscribed to later and that
        starts operating when a consumer requests it
        ref_count provides interface to connectable observable to consumers that
