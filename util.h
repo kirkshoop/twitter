@@ -38,5 +38,14 @@ inline function<observable<string>(observable<long>)> stringandignore() {
         return s.map([](long){return string{};}).ignore_elements();
     };
 }
+
+template <class To, class Rep, class Period>
+To floor(const duration<Rep, Period>& d)
+{
+    To t = std::chrono::duration_cast<To>(d);
+    if (t > d)
+        return t - To{1};
+    return t;
+}
     
 }

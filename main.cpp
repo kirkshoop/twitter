@@ -24,6 +24,7 @@ using namespace std::chrono;
 #include "imgui/imgui_impl_sdl_gl3.h"
 #include <GL/glew.h>
 #include <SDL.h>
+#include <SDL2/SDL_mixer.h>
 
 #include <oauth.h>
 #include <curl/curl.h>
@@ -272,9 +273,30 @@ int main(int argc, const char *argv[])
     string method = isFilter ? "POST" : "GET";
 
     // Setup SDL
-    if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER) != 0)
+    if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_AUDIO|SDL_INIT_TIMER) != 0)
     {
-        printf("Error: %s\n", SDL_GetError());
+        printf("SDL_Init Error: %s\n", SDL_GetError());
+        return -1;
+    }
+
+    // Setup audio
+    if (Mix_OpenAudio( 22050, MIX_DEFAULT_FORMAT, 2, 4096 ) == -1) 
+    {
+        printf("Mix_OpenAudio - Error: %s\n", SDL_GetError());
+        return -1;
+    }
+
+    Mix_Chunk *dash = Mix_LoadWAV((exeparent + "/Resources/dash.wav").c_str());
+    if (dash == NULL)
+    {
+        printf("Mix_LoadWAV dash - Error: %s\n", SDL_GetError());
+        return -1;
+    }
+
+    Mix_Chunk *dot = Mix_LoadWAV((exeparent + "/Resources/dot.wav").c_str());
+    if (dot == NULL)
+    {
+        printf("Mix_LoadWAV dot - Error: %s\n", SDL_GetError());
         return -1;
     }
 
@@ -350,6 +372,9 @@ int main(int argc, const char *argv[])
         ImGui_ImplSdlGL3_Shutdown();
         SDL_GL_DeleteContext(glcontext);
         SDL_DestroyWindow(window);
+        Mix_FreeChunk(dot);
+        Mix_FreeChunk(dash);
+	    Mix_CloseAudio();
         SDL_Quit();
     });
 
@@ -435,7 +460,7 @@ int main(int argc, const char *argv[])
             cerr << rxu::what(ep) << endl;
             return observable<>::empty<Tweet>();
         }) |
-        repeat(0) |
+        repeat() |
         publish() |
         ref_count();
 
@@ -661,11 +686,15 @@ int main(int argc, const char *argv[])
         start_with(noop));
 
     // window tweets by the time that they arrive
-    reducers.push_back(
-        ts |
+    auto tsw = ts |
         onlytweets() |
         window_with_time(length, every, poolthread) |
-        rxo::map([](observable<Tweet> source){
+        publish() |
+        ref_count();
+
+    reducers.push_back(
+        tsw |
+        rxo::map([=](observable<Tweet> source){
             auto rangebegin = time_point_cast<seconds>(system_clock::now()).time_since_epoch();
             auto tweetsperminute = source | 
                 start_with(Tweet{}) |
@@ -711,6 +740,67 @@ int main(int argc, const char *argv[])
                     });
                 });
             return tweetsperminute;
+        }) |
+        merge() |
+        nooponerror() |
+        start_with(noop));
+
+    auto window_timestamp = ts |
+        onlytweets() |
+        rxo::map([](Tweet tw){
+            auto e_s = duration_cast<seconds>(every).count();
+            auto l_s = duration_cast<seconds>(length).count();
+            auto t_s = floor<seconds>(timestamp_ms(tw)).count();
+            auto te_s = t_s - (t_s % e_s);
+            auto tstart_s = te_s - (l_s - e_s);
+            auto tfinish_s = te_s + e_s;
+            int begin = 0;
+            int end = (tfinish_s - tstart_s) / e_s;
+            return iterate(
+                ranges::view::ints(begin, end) | 
+                ranges::view::transform([=](int s){
+                    return make_tuple(tstart_s + (e_s * s), tw);
+                }));
+        }) |
+        merge() |
+        group_by(rxu::apply_to([](int64_t s, Tweet){
+            return s;
+        }), rxu::apply_to([](int64_t, Tweet tw){
+            return tw;
+        })) |
+        rxo::map([=](grouped_observable<int64_t, Tweet> source){
+            return source | 
+                timeout(every) | 
+                on_error_resume_next([](std::exception_ptr){
+                    return empty<Tweet>();
+                });
+        }) |
+        publish() |
+        ref_count();
+
+    // play sounds for up and down inflections in the count of tweets per minute
+    reducers.push_back(window_timestamp |
+        rxo::map([=](observable<Tweet> source){
+            return source | count();
+        }) |
+        merge() |
+        rxo::window(6, 1) |
+        rxo::map([=](observable<int> counts){
+            return counts | average() |
+                zip(counts | last(), counts | first()) |
+                filter(rxu::apply_to([](double avg, long last, long first){
+                    // only keep if the average of three counts is less than 
+                    // the last count or greater than the first count.
+                    // should only keep when there is a inflection up or down.
+                    cerr << avg << ", " << last << ", " << first << endl;
+                    return avg < last && avg > first;
+                })) |
+                rxo::map(rxu::apply_to([=](double , long , long ){
+                    return Reducer([=](Model& md){
+                        Mix_PlayChannel(-1, dot, 0);
+                        return std::move(md);
+                    });
+                }));
         }) |
         merge() |
         nooponerror() |
@@ -1383,6 +1473,8 @@ int main(int argc, const char *argv[])
         if (!lifetime.is_subscribed()) {
             break;
         }
+
+        Mix_PlayingMusic();
 
         ImGui_ImplSdlGL3_NewFrame(window);
 

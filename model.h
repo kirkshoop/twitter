@@ -128,7 +128,7 @@ inline function<observable<Reducer>(observable<Reducer>)> nooponerror() {
                 cerr << rxu::what(ep) << endl;
                 return observable<>::empty<Reducer>();
             }) | 
-            repeat(0);
+            repeat();
     };
 }
 
@@ -306,7 +306,7 @@ inline function<observable<ViewModel>(observable<ViewModel>)> reportandrepeat() 
                 cerr << rxu::what(ep) << endl;
                 return observable<>::empty<ViewModel>();
             }) | 
-            repeat(0);
+            repeat();
     };
 }
 

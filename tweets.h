@@ -185,7 +185,7 @@ auto twitter_stream_reconnection = [](observe_on_one_worker tweetthread){
                 }
                 return observable<>::error<string>(ep, tweetthread);
             }) |
-            repeat(0);
+            repeat();
     };
 };
 
