@@ -609,6 +609,7 @@ int main(int argc, const char *argv[])
             start_with(noop));
     }
 
+#if 1
     reducers.push_back(
         ts |
         onlytweets() |
@@ -651,6 +652,7 @@ int main(int argc, const char *argv[])
         merge(poolthread) |
         nooponerror() |
         start_with(noop));
+#endif
 
     // group tweets, that arrive, by the timestamp_ms value
     reducers.push_back(
@@ -792,7 +794,7 @@ int main(int argc, const char *argv[])
                     // only keep if the average of three counts is less than 
                     // the last count or greater than the first count.
                     // should only keep when there is a inflection up or down.
-                    cerr << avg << ", " << last << ", " << first << endl;
+                    //cerr << avg << ", " << last << ", " << first << endl;
                     return avg < last && avg > first;
                 })) |
                 rxo::map(rxu::apply_to([=](double , long , long ){

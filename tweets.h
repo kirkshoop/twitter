@@ -166,9 +166,9 @@ auto twitter_stream_reconnection = [](observe_on_one_worker tweetthread){
                             cerr << "rate limited - waiting to retry.." << endl;
                             return observable<>::timer(minutes(1), tweetthread) | stringandignore();
                         case errorcodeclass::Invalid:
-                            cerr << "invalid request - exit" << endl;
+                            cerr << "invalid request - propagate" << endl;
                         default:
-                            return observable<>::error<string>(ep, tweetthread);
+                            cerr << "unrecognized error - propagate" << endl;
                     };
                 }
                 catch (const timeout_error& ex) {
@@ -176,11 +176,12 @@ auto twitter_stream_reconnection = [](observe_on_one_worker tweetthread){
                     return observable<>::empty<string>();
                 }
                 catch (const exception& ex) {
+                    cerr << "unknown exception - terminate" << endl;
                     cerr << ex.what() << endl;
                     terminate();
                 }
                 catch (...) {
-                    cerr << "unknown exception - not derived from std::exception" << endl;
+                    cerr << "unknown exception - not derived from std::exception - terminate" << endl;
                     terminate();
                 }
                 return observable<>::error<string>(ep, tweetthread);
@@ -208,10 +209,13 @@ auto twitterrequest = [](observe_on_one_worker tweetthread, ::rxcurl::rxcurl fac
             url = signedurl;
         }
 
+        cerr << "start twitter stream request" << endl;
+
         return factory.create(http_request{url, method, {}, {}}) |
             rxo::map([](http_response r){
                 return r.body.chunks;
             }) |
+            finally([](){cerr << "end twitter stream request" << endl;}) |
             merge(tweetthread);
     }) |
     twitter_stream_reconnection(tweetthread) | 

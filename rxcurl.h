@@ -35,6 +35,7 @@ struct rxcurl_state
                 out.on_completed();
             }) |
             subscribe_on(thread) |
+            finally([](){cerr << "rxcurl worker exit" << endl;}) |
             publish() |
             connect_forever();
     }
@@ -66,6 +67,7 @@ struct http_state
             rxcurl->worker
                 .take(1)
                 .tap([=](CURLMsg*){
+                    //cerr << "rxcurl request destroy: " << localRequest.method << " - " << localRequest.url << endl;
                     curl_multi_remove_handle(localrxcurl->curlm, localcurl);
                     curl_easy_cleanup(localcurl);
                     curl_slist_free_all(localheaders);
@@ -175,6 +177,8 @@ struct rxcurl
 
                     auto& request = r.state->request;
 
+                    //cerr << "rxcurl request: " << request.method << " - " << request.url << endl;
+
                     // ==== cURL Setting
                     curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
 
@@ -198,7 +202,7 @@ struct rxcurl
                     }
     
                     // - User agent name
-                    curl_easy_setopt(curl, CURLOPT_USERAGENT, "rxcpp curl client 1.0");
+                    curl_easy_setopt(curl, CURLOPT_USERAGENT, "rxcpp curl client 1.1");
                     // - HTTP STATUS >=400 ---> ERROR
                     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1);
                     // - Callback function
@@ -214,35 +218,45 @@ struct rxcurl
                 })
                 .subscribe();
 
+            weak_ptr<http_state> wrs = requestState;
+
             // extract completion and result
             state->worker
-                .filter([=](CURLMsg* message){
-                    return !!message && message->easy_handle == r.state->curl && message->msg == CURLMSG_DONE;
+                .filter([wrs](CURLMsg* message){
+                    auto rs = wrs.lock();
+                    return !!rs && !!message && message->easy_handle == rs->curl && message->msg == CURLMSG_DONE;
                 })
                 .take(1)
-                .tap([r](CURLMsg* message){
-
-                    r.state->error.resize(strlen(&r.state->error[0]));
-
-                    auto chunkout = r.state->chunkbus.get_subscriber();
-
-                    long httpStatus = 0;
-
-                    curl_easy_getinfo(r.state->curl, CURLINFO_RESPONSE_CODE, &httpStatus);
-                    r.state->httpStatus = httpStatus;
-
-                    if(message->data.result != CURLE_OK) {
-                        r.state->code = message->data.result;
-                        if (r.state->error.empty()) {
-                            r.state->error = curl_easy_strerror(message->data.result);
-                        }
-                        observable<>::error<string>(http_exception(r.state)).subscribe(chunkout);
-                        return;
-                    } else if (httpStatus > 499) {
-                        observable<>::error<string>(http_exception(r.state)).subscribe(chunkout);
+                .tap([wrs](CURLMsg* message){
+                    auto rs = wrs.lock();
+                    if (!rs) {
                         return;
                     }
 
+                    rs->error.resize(strlen(&rs->error[0]));
+
+                    auto chunkout = rs->chunkbus.get_subscriber();
+
+                    long httpStatus = 0;
+
+                    curl_easy_getinfo(rs->curl, CURLINFO_RESPONSE_CODE, &httpStatus);
+                    rs->httpStatus = httpStatus;
+
+                    if(message->data.result != CURLE_OK) {
+                        rs->code = message->data.result;
+                        if (rs->error.empty()) {
+                            rs->error = curl_easy_strerror(message->data.result);
+                        }
+                        //cerr << "rxcurl request fail: " << httpStatus << " - " << rs->error << endl;
+                        observable<>::error<string>(http_exception(rs)).subscribe(chunkout);
+                        return;
+                    } else if (httpStatus > 499) {
+                        //cerr << "rxcurl request http fail: " << httpStatus << " - " << rs->error << endl;
+                        observable<>::error<string>(http_exception(rs)).subscribe(chunkout);
+                        return;
+                    }
+
+                    //cerr << "rxcurl request complete: " << httpStatus << " - " << rs->error << endl;
                     chunkout.on_completed();
                 })
                 .subscribe();
