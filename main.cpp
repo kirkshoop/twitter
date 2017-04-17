@@ -609,7 +609,6 @@ int main(int argc, const char *argv[])
             start_with(noop));
     }
 
-#if 1
     reducers.push_back(
         ts |
         onlytweets() |
@@ -652,7 +651,6 @@ int main(int argc, const char *argv[])
         merge(poolthread) |
         nooponerror() |
         start_with(noop));
-#endif
 
     // group tweets, that arrive, by the timestamp_ms value
     reducers.push_back(

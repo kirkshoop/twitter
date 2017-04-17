@@ -64,6 +64,7 @@ struct http_state
             auto localheaders = headers;
             auto localrxcurl = rxcurl;
             auto localRequest = request;
+            subscriber<string>* localChunkout = chunkout.release();
             rxcurl->worker
                 .take(1)
                 .tap([=](CURLMsg*){
@@ -71,6 +72,7 @@ struct http_state
                     curl_multi_remove_handle(localrxcurl->curlm, localcurl);
                     curl_easy_cleanup(localcurl);
                     curl_slist_free_all(localheaders);
+                    delete localChunkout;
                 })
                 .subscribe();
 
@@ -92,6 +94,7 @@ struct http_state
     CURLcode code;
     int httpStatus;
     subjects::subject<string> chunkbus;
+    unique_ptr<subscriber<string>> chunkout;
     CURL* curl;
     struct curl_slist *headers;
     vector<string> strings;
@@ -130,13 +133,12 @@ struct http_response
     shared_ptr<http_state> state;
 };
 
-size_t rxcurlhttpCallback(char* ptr, size_t size, size_t nmemb, http_state* response) {
+size_t rxcurlhttpCallback(char* ptr, size_t size, size_t nmemb, subscriber<string>* out) {
     int iRealSize = size * nmemb;
 
-    auto chunkout = response->chunkbus.get_subscriber();
     string chunk;
     chunk.assign(ptr, iRealSize);
-    chunkout.on_next(chunk);
+    out->on_next(chunk);
 
     return iRealSize;
 }
@@ -205,10 +207,12 @@ struct rxcurl
                     curl_easy_setopt(curl, CURLOPT_USERAGENT, "rxcpp curl client 1.1");
                     // - HTTP STATUS >=400 ---> ERROR
                     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1);
+
                     // - Callback function
                     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, rxcurlhttpCallback);
                     // - Write data
-                    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)r.state.get());
+                    r.state->chunkout.reset(new subscriber<string>(r.state->chunkbus.get_subscriber()));
+                    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)r.state->chunkout.get());
 
                     // - keep error messages
                     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, &r.state->error[0]); 
