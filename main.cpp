@@ -108,6 +108,7 @@ inline void updategroups(Model& model, milliseconds timestamp, milliseconds wind
     }
 }
 
+string settingsFile;
 json settings;
 
 int main(int argc, const char *argv[])
@@ -146,7 +147,7 @@ int main(int argc, const char *argv[])
     cerr << "dir = " << exedir.c_str() << endl;
     
     bool setting = false;
-    string settingsFile = exedir + "/settings.json";
+    settingsFile = exedir + "/settings.json";
 
     if (argc == 2 && ifstream(argv[1]).good()) {
         setting = true;
@@ -229,13 +230,14 @@ int main(int argc, const char *argv[])
     }
 
     // ==== Constants - paths
-    string URL = "https://stream.twitter.com/1.1/statuses/";
+    const string URL = "https://stream.twitter.com/1.1/statuses/";
+    string url = URL;
     string filepath;
     if (!playback) {
         if (!setting) {
             // read from args
 
-            URL += argv[5 + argoffset];
+            url += argv[5 + argoffset];
 
             // ==== Twitter keys
             const char *CONS_KEY = argv[1 + argoffset];
@@ -247,30 +249,11 @@ int main(int argc, const char *argv[])
             settings["ConsumerSecret"] = string(CONS_SEC);
             settings["AccessTokenKey"] = string(ATOK_KEY);
             settings["AccessTokenSecret"] = string(ATOK_SEC);
-
-            ofstream o(settingsFile);
-            o << setw(4) << settings;
-        } else {
-            URL += settings["Query"]["Action"].get<std::string>() + ".json?";
-            if (settings.count("Language") > 0) {
-                URL += "language=" + settings["Language"].get<std::string>() + "&";
-            }
-            if (settings["Query"].count("Keywords") > 0 && settings["Query"]["Keywords"].is_array()) {
-                URL += "track=";
-                for (auto& kw : settings["Query"]["Keywords"]) {
-                    URL += kw.get<std::string>() + ",";
-                }
-            }
-        }
-        cerr << "url = " << URL.c_str() << endl;
+        } 
     } else {
         filepath = argv[1 + argoffset];
         cerr << "file = " << filepath.c_str() << endl;
     }
-
-    // ==== Constants - flags
-    const bool isFilter = URL.find("/statuses/filter") != string::npos;
-    string method = isFilter ? "POST" : "GET";
 
     // Setup SDL
     if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_AUDIO|SDL_INIT_TIMER) != 0)
@@ -416,6 +399,43 @@ int main(int argc, const char *argv[])
 
     composite_subscription lifetime;
 
+    rxsub::replay<json, decltype(mainthread)> setting_update(1, mainthread, lifetime);
+    auto setting_updates = setting_update.get_observable();
+    auto sendsettings = setting_update.get_subscriber();
+    auto sf = settingsFile;
+    auto update_settings = [sendsettings, sf](json s){
+        ofstream o(sf);
+        o << setw(4) << s;
+        if (sendsettings.is_subscribed()){
+            sendsettings.on_next(s);
+        }
+    };
+
+    update_settings(settings);
+
+    auto urlchanges = setting_updates |
+        rxo::map([=](const json& settings){
+            string url = URL + settings["Query"]["Action"].get<std::string>() + ".json?";
+            if (settings.count("Language") > 0) {
+                url += "language=" + settings["Language"].get<std::string>() + "&";
+            }
+            if (settings["Query"].count("Keywords") > 0 && settings["Query"]["Keywords"].is_array()) {
+                url += "track=";
+                for (auto& kw : settings["Query"]["Keywords"]) {
+                    url += kw.get<std::string>() + ",";
+                }
+            }
+            return url;
+        }) |
+        distinct_until_changed() |
+        debounce(milliseconds(500), mainthread) |
+        tap([](string url){
+            cerr << "url = " << url.c_str() << endl;
+        }) |
+        replay(1, mainthread) |
+        ref_count() |
+        as_dynamic();
+
     // ==== Tweets
 
     observable<string> chunks;
@@ -424,11 +444,34 @@ int main(int argc, const char *argv[])
     if (playback) {
         chunks = filechunks(tweetthread, filepath);
     } else {
-        chunks = twitterrequest(tweetthread, factory, URL, method, settings["ConsumerKey"], settings["ConsumerSecret"], settings["AccessTokenKey"], settings["AccessTokenSecret"]);
+        chunks = urlchanges |
+            rxo::map([&](const string& url){
+                // ==== Constants - flags
+                const bool isFilter = url.find("/statuses/filter") != string::npos;
+                string method = isFilter ? "POST" : "GET";
+
+                return twitterrequest(tweetthread, factory, url, method, settings["ConsumerKey"], settings["ConsumerSecret"], settings["AccessTokenKey"], settings["AccessTokenSecret"]) |
+                    // handle invalid requests by waiting for a trigger to try again
+                    on_error_resume_next([](std::exception_ptr ep){
+                        cerr << rxu::what(ep) << endl;
+                        return rxs::never<string>();
+                    });
+            }) |
+            switch_on_next();
     }
 
     // parse tweets
-    auto tweets = chunks | parsetweets(poolthread, tweetthread);
+    auto tweets = chunks | 
+        parsetweets(poolthread, tweetthread) |
+        rxo::map([](parsedtweets p){
+            p.errors |
+                tap([](parseerror e){
+                    cerr << rxu::what(e.ep) << endl;
+                }) | 
+                subscribe<parseerror>();
+            return p.tweets;
+        }) | 
+        merge(tweetthread);
 
     /* Take tweets, make sure that any error is ignored, and publish them
        as a stream of observables available to multiple on-demand subscribers.
@@ -441,10 +484,8 @@ int main(int argc, const char *argv[])
        ref_count provides interface to connectable observable to consumers that
        take ordinary observable. It also keeps the track, how many consumers are
        connected to the observable, hence the name.
-       Repeat repeats the input given number of times. In RxCpp 0 is a magic
-       value to specify it should be run forever. Note, that this is unlike to
-       other Rx implementations, where 0 means to return an empty sequence,
-       and will be changed in a newer version of RxCpp
+       Retry repeats the input given number of times when it fails. When no count is 
+       given it will repeat infinitely when it fails.
 
        OnErrorResumeNext:
          https://github.com/ReactiveX/RxJava/wiki/Error-Handling-Operators
@@ -456,13 +497,10 @@ int main(int argc, const char *argv[])
          http://www.introtorx.com/content/v1.0.10621.0/14_HotAndColdObservables.html
      */
     auto ts = tweets |
-        on_error_resume_next([](std::exception_ptr ep){
-            cerr << rxu::what(ep) << endl;
-            return observable<>::empty<Tweet>();
-        }) |
-        repeat() |
+        retry() |
         publish() |
-        ref_count();
+        ref_count() |
+        as_dynamic();
 
     // ==== Model
 
@@ -518,7 +556,7 @@ int main(int argc, const char *argv[])
     auto delayed_tweets = ts |
         buffer_with_time(every, tweetthread) |
         delay(length, tweetthread) |
-        publish() |
+        publish(lifetime) |
         connect_forever();
 
     /* Whenever jsonchanged becomes true, generate an observable that consists of
@@ -567,6 +605,20 @@ int main(int argc, const char *argv[])
                 });
         }) |
         switch_on_next(tweetthread) |
+        nooponerror() |
+        start_with(noop));
+
+    /* Store current url in the model
+        Take changes to the url and save the current url in the model.
+    */
+    reducers.push_back(
+        urlchanges | 
+        rxo::map([=](string url){
+            return Reducer([=](Model& m){
+                m.data->url = url;
+                return std::move(m);
+            });
+        }) |
         nooponerror() |
         start_with(noop));
 
@@ -690,7 +742,8 @@ int main(int argc, const char *argv[])
         onlytweets() |
         window_with_time(length, every, poolthread) |
         publish() |
-        ref_count();
+        ref_count() |
+        as_dynamic();
 
     reducers.push_back(
         tsw |
@@ -776,7 +829,8 @@ int main(int argc, const char *argv[])
                 });
         }) |
         publish() |
-        ref_count();
+        ref_count() |
+        as_dynamic();
 
     // play sounds for up and down inflections in the count of tweets per minute
     reducers.push_back(window_timestamp |
@@ -891,7 +945,8 @@ int main(int argc, const char *argv[])
         // only view model updates every 200ms
         sample_with_time(milliseconds(200), mainthread) |
         publish() |
-        ref_count();
+        ref_count() |
+        as_dynamic();
 
     // ==== View
 
@@ -905,7 +960,8 @@ int main(int argc, const char *argv[])
             return ViewModel{m};
         }) |
         publish() |
-        ref_count();
+        ref_count() |
+        as_dynamic();
 
     vector<observable<ViewModel>> renderers;
 
@@ -934,7 +990,7 @@ int main(int argc, const char *argv[])
                     ImGui::End();
                 });
 
-                ImGui::TextWrapped("url: %s", URL.c_str());
+                ImGui::TextWrapped("url: %s", m.url.c_str());
 
                 {
                     ImGui::Columns(2);
@@ -946,7 +1002,7 @@ int main(int argc, const char *argv[])
                     ImGui::Text("Total Tweets: %d", m.total);
                 }
 
-                if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
+                if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_Framed))
                 {
                     bool changed = false;
 
@@ -1023,6 +1079,41 @@ int main(int argc, const char *argv[])
                     keep = minutes(minutestokeep);
                     settings["Keep"] = keep.count();
 
+                    // capture size of previous control
+                    ImVec2 linesize = ImGui::GetItemRectSize();
+
+                    ImGui::Separator();
+
+                    // make room for three
+                    linesize.y *= 3;
+
+                    ImGui::ListBoxHeader("Query", linesize);
+                    if (ImGui::Selectable("Sample", settings["Query"]["Action"].get<std::string>() == "sample")) {
+                        settings["Query"]["Action"] = "sample";
+                        settings["Query"].erase("Keywords");
+                        changed = true;
+                    }
+                    if (ImGui::Selectable("Filter", settings["Query"]["Action"].get<std::string>() == "filter")) {
+                        settings["Query"]["Action"] = "filter";
+                        settings["Query"]["Keywords"] = json::array();
+                        changed = true;
+                    }
+                    ImGui::ListBoxFooter();
+
+                    if (settings["Query"]["Action"].get<std::string>() == "filter") {
+                        ImGui::Indent();
+                        RXCPP_UNWIND(Unindent, [](){
+                            ImGui::Unindent();
+                        });
+                        auto keyword_list = ranges::accumulate(settings["Query"]["Keywords"].get<std::vector<string>>(), string(), [](string acc, string kw){ return acc + kw + ", ";});
+                        keyword_list.reserve(128);
+                        if (ImGui::InputText("Keywords", &keyword_list[0], keyword_list.capacity())) {
+                            keyword_list.resize(strlen(&keyword_list[0]));
+                            settings["Query"]["Keywords"] = ranges::action::split(keyword_list, ranges::view::c_str(","));
+                            changed = true;
+                        }
+                    }
+
                     static string language(settings.count("Language") > 0 ? settings["Language"].get<string>() : string{});
                     language.reserve(64);
                     if (ImGui::InputText("Language", &language[0], language.capacity())) {
@@ -1032,8 +1123,7 @@ int main(int argc, const char *argv[])
                     }
 
                     if (changed) {
-                        ofstream o(settingsFile);
-                        o << setw(4) << settings;
+                        update_settings(settings);
                     }
                 }
 
@@ -1055,7 +1145,7 @@ int main(int argc, const char *argv[])
 
                 // by group
 
-                if (ImGui::CollapsingHeader("Negative Tweets Per Minute", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
+                if (ImGui::CollapsingHeader("Negative Tweets Per Minute", ImGuiTreeNodeFlags_Framed))
                 {
                     auto& tpm = vm.data->negativetpm;
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
@@ -1064,7 +1154,7 @@ int main(int argc, const char *argv[])
                     ImGui::PopStyleColor(1);
                 }
 
-                if (ImGui::CollapsingHeader("Positive Tweets Per Minute", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
+                if (ImGui::CollapsingHeader("Positive Tweets Per Minute", ImGuiTreeNodeFlags_Framed))
                 {
                     auto& tpm = vm.data->positivetpm;
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
@@ -1089,7 +1179,11 @@ int main(int argc, const char *argv[])
                         const float t = Clamp((ImGui::GetMousePos().x - plotposition.x) / plotextent.x, 0.0f, 0.9999f);
                         idx = (int)(t * (m.groups.size() - 1));
                     }
-                    idx = min(idx, int(m.groups.size() - 1));
+                    idx = min(idx, int(m.groups.size()) - 1);
+                    int defaultGroupIndex = (keep / every) - ((length / every) - 1);
+                    if (idx == -1 && int(m.groups.size()) > defaultGroupIndex) {
+                        idx = defaultGroupIndex;
+                    }
 
                     ImGui::PushItemWidth(ImGui::GetContentRegionAvailWidth());
                     ImGui::SliderInt("", &idx, 0, m.groups.size() - 1);
@@ -1323,7 +1417,7 @@ int main(int argc, const char *argv[])
                     ImGui::End();
                 });
 
-                ImGui::TextWrapped("url: %s", URL.c_str());
+                ImGui::TextWrapped("url: %s", m.url.c_str());
                 ImGui::Text("Total Tweets: %d", m.total);
 
                 if (!m.tweets.empty()) {
@@ -1454,7 +1548,7 @@ int main(int argc, const char *argv[])
     // subscribe to everything!
     iterate(renderers) |
         merge() |
-        subscribe<ViewModel>([](const ViewModel&){});
+        subscribe<ViewModel>(lifetime, [](const ViewModel&){});
 
     // ==== Main
 

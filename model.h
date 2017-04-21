@@ -102,6 +102,7 @@ struct Model
 {
     struct shared 
     {
+        string url;
         rxsc::scheduler::clock_type::time_point timestamp;
         int total = 0;
         deque<TimeRange> groups;
