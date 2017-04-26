@@ -399,10 +399,15 @@ int main(int argc, const char *argv[])
 
     composite_subscription lifetime;
 
+    /* make changes to settings observable
+
+       This allows setting changes to be composed into the expressions to reconfigure them.
+    */
     rxsub::replay<json, decltype(mainthread)> setting_update(1, mainthread, lifetime);
     auto setting_updates = setting_update.get_observable();
     auto sendsettings = setting_update.get_subscriber();
     auto sf = settingsFile;
+    // call update_settings() to save changes and trigger parties interested in the change
     auto update_settings = [sendsettings, sf](json s){
         ofstream o(sf);
         o << setw(4) << s;
@@ -411,8 +416,17 @@ int main(int argc, const char *argv[])
         }
     };
 
+    // initial update
     update_settings(settings);
 
+    /* filter settings updates to changes that change the url for the twitter stream.
+
+       distinct_until_changed is used to filter out settings updates that do not change the url
+
+       debounce is used to wait until the updates pause before signaling the url has changed. 
+         this is important since typing in keywords would cause many intermediate changes to the url
+         and twitter rate limits the user if there are too many fast restarts.
+    */    
     auto urlchanges = setting_updates |
         rxo::map([=](const json& settings){
             string url = URL + settings["Query"]["Action"].get<std::string>() + ".json?";
@@ -428,7 +442,7 @@ int main(int argc, const char *argv[])
             return url;
         }) |
         distinct_until_changed() |
-        debounce(milliseconds(500), mainthread) |
+        debounce(milliseconds(1000), mainthread) |
         tap([](string url){
             cerr << "url = " << url.c_str() << endl;
         }) |
@@ -444,6 +458,7 @@ int main(int argc, const char *argv[])
     if (playback) {
         chunks = filechunks(tweetthread, filepath);
     } else {
+        // switch to new connection whenever the url changes
         chunks = urlchanges |
             rxo::map([&](const string& url){
                 // ==== Constants - flags
@@ -755,7 +770,7 @@ int main(int argc, const char *argv[])
                     return Reducer([=](Model& md){
                         auto& m = *(md.data);
 
-                        auto maxsize = (duration_cast<seconds>(keep).count()+duration_cast<seconds>(length).count())/duration_cast<seconds>(every).count();
+                        auto maxsize = duration_cast<seconds>(keep).count()/duration_cast<seconds>(every).count();
 
                         if (m.tweetsperminute.size() == 0) {
                             m.tweetsstart = duration_cast<seconds>(rangebegin + length);
@@ -798,8 +813,10 @@ int main(int argc, const char *argv[])
         nooponerror() |
         start_with(noop));
 
+    // window tweets by the timestamp_ms embedded in each tweet
     auto window_timestamp = ts |
         onlytweets() |
+        // for each tweet emit duplicates of that tweet for each time window
         rxo::map([](Tweet tw){
             auto e_s = duration_cast<seconds>(every).count();
             auto l_s = duration_cast<seconds>(length).count();
@@ -816,6 +833,7 @@ int main(int argc, const char *argv[])
                 }));
         }) |
         merge() |
+        // group tweets from the same window
         group_by(rxu::apply_to([](int64_t s, Tweet){
             return s;
         }), rxu::apply_to([](int64_t, Tweet tw){
@@ -823,6 +841,7 @@ int main(int argc, const char *argv[])
         })) |
         rxo::map([=](grouped_observable<int64_t, Tweet> source){
             return source | 
+                // stop each window after a full window interval occurs without a new tweet
                 timeout(every) | 
                 on_error_resume_next([](std::exception_ptr){
                     return empty<Tweet>();
@@ -844,9 +863,8 @@ int main(int argc, const char *argv[])
                 zip(counts | last(), counts | first()) |
                 filter(rxu::apply_to([](double avg, long last, long first){
                     // only keep if the average of three counts is less than 
-                    // the last count or greater than the first count.
+                    // the last count and greater than the first count.
                     // should only keep when there is a inflection up or down.
-                    //cerr << avg << ", " << last << ", " << first << endl;
                     return avg < last && avg > first;
                 })) |
                 rxo::map(rxu::apply_to([=](double , long , long ){
@@ -864,6 +882,8 @@ int main(int argc, const char *argv[])
     reducers.push_back(
         ts |
         onlytweets() |
+        // batch the tweets to be more efficient about model updates
+        // the trade off is adding latency to the model updates
         buffer_with_time(milliseconds(200), poolthread) |
         filter([](const vector<Tweet>& tws){ return !tws.empty(); }) |
         rxo::map([=](const vector<Tweet>& tws){
@@ -906,6 +926,8 @@ int main(int argc, const char *argv[])
     reducers.push_back(
         ts |
         onlytweets() |
+        // batch the tweets to be more efficient about model updates
+        // the trade off is adding latency to the model updates
         window_with_time(milliseconds(200), poolthread) |
         rxo::map([](observable<Tweet> source){
             auto tweetsperminute = source | count() | rxo::map([](int count){
