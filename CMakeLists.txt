@@ -113,6 +113,35 @@ set_source_files_properties(${SAMPLE_RESOURCES} PROPERTIES
     HEADER_FILE_ONLY ON
     MACOSX_PACKAGE_LOCATION Resources)
 
+set(Boost_USE_STATIC_LIBS OFF)
+set(Boost_USE_MULTITHREADED ON)
+set(Boost_USE_STATIC_RUNTIME OFF)
+find_package(Boost COMPONENTS thread) 
+
+MESSAGE( STATUS "Boost_VERSION: " ${Boost_VERSION} )
+
+set(FUTURE_PROJECT
+    future)
+
+add_executable(${FUTURE_PROJECT} future.cpp ${SAMPLE_RESOURCES})
+
+target_compile_options(${FUTURE_PROJECT} PUBLIC ${SHARED_COMPILE_OPTIONS})
+target_compile_features(${FUTURE_PROJECT} PUBLIC ${SHARED_COMPILE_FEATURES})
+target_compile_definitions(${FUTURE_PROJECT} PUBLIC BOOST_THREAD_VERSION=4)
+
+target_include_directories(${FUTURE_PROJECT} SYSTEM PUBLIC 
+    ${Boost_INCLUDE_DIRS}
+    ${range-v3_INCLUDE_DIR} 
+    ${LIBOAUTH_INCLUDE_DIRS} 
+    ${CURL_INCLUDE_DIRS} 
+    ${JSON_INCLUDE_DIRS})
+
+target_link_libraries(${FUTURE_PROJECT} 
+    ${Boost_LIBRARIES}
+    ${CMAKE_THREAD_LIBS_INIT} 
+    ${LIBOAUTH_LIBRARY} 
+    ${CURL_LIBRARIES})
+
 # configure unit tests via CTest
 enable_testing()
 set(CTEST_CONFIGURATION_TYPE "${JOB_BUILD_CONFIGURATION}")
