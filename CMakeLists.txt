@@ -75,7 +75,6 @@ set(SAMPLE_RESOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/NotoMono-Regular.ttf
     ${CMAKE_CURRENT_SOURCE_DIR}/NotoSansSymbols-Regular.ttf
     ${CMAKE_CURRENT_SOURCE_DIR}/dash.wav
-    ${CMAKE_CURRENT_SOURCE_DIR}/dot.wav
 )
 
 add_executable(${SAMPLE_PROJECT} ${SAMPLE_SOURCES} ${SAMPLE_RESOURCES})
@@ -131,8 +130,8 @@ target_include_directories(${FUTURE_PROJECT} SYSTEM PUBLIC
     ${Boost_INCLUDE_DIRS}
     ${range-v3_INCLUDE_DIR} 
     ${LIBOAUTH_INCLUDE_DIRS} 
-    ${CURL_INCLUDE_DIRS} 
-    ${JSON_INCLUDE_DIRS})
+    ${CURL_INCLUDE_DIRS}
+    ${jsoncpp_INCLUDE_DIR})
 
 target_link_libraries(${FUTURE_PROJECT} 
     ${Boost_LIBRARIES}
