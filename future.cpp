@@ -190,7 +190,7 @@ inline future<void> each(future<It<T>> next, It<T> end, function<void(It<T>, It<
         auto next = ++cursor;
 //        cerr << "%" << flush;
         return each(std::move(next), end, f);
-    });
+    }).unwrap();
 }
 
 size_t fncCallback(char* ptr, size_t size, size_t nmemb, It<string>::Cursor* cursor) {

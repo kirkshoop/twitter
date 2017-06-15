@@ -124,7 +124,9 @@ add_executable(${FUTURE_PROJECT} future.cpp ${SAMPLE_RESOURCES})
 
 target_compile_options(${FUTURE_PROJECT} PUBLIC ${SHARED_COMPILE_OPTIONS})
 target_compile_features(${FUTURE_PROJECT} PUBLIC ${SHARED_COMPILE_FEATURES})
-target_compile_definitions(${FUTURE_PROJECT} PUBLIC BOOST_THREAD_VERSION=4)
+target_compile_definitions(${FUTURE_PROJECT} PUBLIC 
+    BOOST_THREAD_VERSION=4 
+    BOOST_THREAD_PROVIDES_FUTURE_CONTINUATION=1)
 
 target_include_directories(${FUTURE_PROJECT} SYSTEM PUBLIC 
     ${Boost_INCLUDE_DIRS}

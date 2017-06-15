@@ -20,7 +20,7 @@ if(NOT EXISTS "${jsoncpp_INCLUDE_DIR}")
     )
 endif()
 
-if(EXISTS "${jsoncpp_INCLUDE_DIR}")
+if(EXISTS "${jsoncpp_INCLUDE_DIR}/json.hpp")
   include(FindPackageHandleStandardArgs)
   mark_as_advanced(jsoncpp_INCLUDE_DIR)
 else()
