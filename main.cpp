@@ -988,7 +988,7 @@ int main(int argc, const char *argv[])
         rxo::map([](Model& m){
             return ViewModel{m};
         }) |
-        publish() |
+        replay(1) |
         ref_count() |
         as_dynamic();
 
