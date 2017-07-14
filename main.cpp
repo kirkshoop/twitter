@@ -988,6 +988,17 @@ int main(int argc, const char *argv[])
         rxo::map([](Model& m){
             return ViewModel{m};
         }) |
+        as_dynamic();
+
+    auto draw = frames |
+        with_latest_from(rxu::take_at<1>(), viewModels) |
+        tap([=](const ViewModel&){
+            auto renderthreadid = this_thread::get_id();
+            if (mainthreadid != renderthreadid) {
+                cerr << "render on wrong thread!" << endl;
+                terminate();
+            }
+        }) |
         replay(1) |
         ref_count() |
         as_dynamic();
@@ -996,15 +1007,8 @@ int main(int argc, const char *argv[])
 
     // render analysis
     renderers.push_back(
-        frames |
-        with_latest_from(rxu::take_at<1>(), viewModels) |
+        draw |
         tap([=](const ViewModel& vm){
-            auto renderthreadid = this_thread::get_id();
-            if (mainthreadid != renderthreadid) {
-                cerr << "render on wrong thread!" << endl;
-                terminate();
-            }
-
             auto& m = *vm.m.data;
 
             static ImGuiTextFilter wordfilter(settings["WordFilter"].get<string>().c_str());
@@ -1429,15 +1433,8 @@ int main(int argc, const char *argv[])
 
     // render recent
     renderers.push_back(
-        frames |
-        with_latest_from(rxu::take_at<1>(), viewModels) |
+        draw |
         tap([=](const ViewModel& vm){
-            auto renderthreadid = this_thread::get_id();
-            if (mainthreadid != renderthreadid) {
-                cerr << "render on wrong thread!" << endl;
-                terminate();
-            }
-
             auto& m = *vm.m.data;
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
@@ -1519,14 +1516,8 @@ int main(int argc, const char *argv[])
 
     // render controls
     renderers.push_back(
-        frames |
-        with_latest_from(rxu::take_at<1>(), viewModels) |
+        draw |
         tap([=, &jsonfile, &dumptext, &dumpjson](const ViewModel&){
-            auto renderthreadid = this_thread::get_id();
-            if (mainthreadid != renderthreadid) {
-                cerr << "render on wrong thread!" << endl;
-                terminate();
-            }
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Output")) {
@@ -1552,14 +1543,8 @@ int main(int argc, const char *argv[])
 
     // render framerate
     renderers.push_back(
-        frames |
-        with_latest_from(rxu::take_at<1>(), viewModels) |
+        draw |
         tap([=](const ViewModel&){
-            auto renderthreadid = this_thread::get_id();
-            if (mainthreadid != renderthreadid) {
-                cerr << "render on wrong thread!" << endl;
-                terminate();
-            }
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Twitter App")) {
