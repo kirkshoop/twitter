@@ -95,8 +95,15 @@ struct TweetGroup
     WordCountMap words;
     int positive = 0;
     int negative = 0;
+    int toxic = 0;
 };
 
+struct Perspective
+{
+    float toxicity;
+    float spam;
+    float inflammatory;
+};
 
 struct Model
 {
@@ -113,7 +120,9 @@ struct Model
         WordCountMap allwords;
         WordCountMap positivewords;
         WordCountMap negativewords;
+        WordCountMap toxicwords;
         unordered_map<string, string> sentiment;
+        unordered_map<string, Perspective> perspective;
     };
     shared_ptr<shared> data = make_shared<shared>();
 };
@@ -122,10 +131,13 @@ using Reducer = function<Model(Model&)>;
 
 auto noop = Reducer([](Model& m){return std::move(m);});
 
-inline function<observable<Reducer>(observable<Reducer>)> nooponerror() {
-    return [](observable<Reducer> s){
+inline function<observable<Reducer>(observable<Reducer>)> nooponerror(string from = string{}) {
+    return [=](observable<Reducer> s){
         return s | 
-            on_error_resume_next([](std::exception_ptr ep){
+            on_error_resume_next([=](std::exception_ptr ep){
+                if (!from.empty()) {
+                    cerr << from << " - ";
+                }
                 cerr << rxu::what(ep) << endl;
                 return observable<>::empty<Reducer>();
             }) | 
@@ -151,7 +163,8 @@ int idx = 0;
 const int scope_all = 1;
 const int scope_all_negative = 2;
 const int scope_all_positive = 3;
-const int scope_selected = 4;
+const int scope_all_toxic = 4;
+const int scope_selected = 5;
 static int scope = scope_selected;
 
 struct ViewModel
@@ -204,18 +217,30 @@ struct ViewModel
                     ranges::action::sort([](const WordCount& l, const WordCount& r){
                         return l.count > r.count;
                     });
-            } else {
-                data->scope_words = &data->allwords;
-                data->allwords = model.allwords |
+            } else if (scope == scope_all_toxic) {
+                data->scope_words = &data->toxicwords;
+                data->toxicwords = model.toxicwords |
                     ranges::view::transform([&](const pair<string, int>& word){
                         return WordCount{word.first, word.second, {}};
                     });
 
-                data->allwords |=
+                data->toxicwords |=
                     ranges::action::sort([](const WordCount& l, const WordCount& r){
                         return l.count > r.count;
                     });
+            } else {
+                data->scope_words = &data->allwords;
             }
+
+            data->allwords = model.allwords |
+                ranges::view::transform([&](const pair<string, int>& word){
+                    return WordCount{word.first, word.second, {}};
+                });
+
+            data->allwords |=
+                ranges::action::sort([](const WordCount& l, const WordCount& r){
+                    return l.count > r.count;
+                });
 
             data->scope_tweets = &model.tweets;
             data->scope_begin = model.groups.empty() ? string{} : utctextfrom(duration_cast<seconds>(model.groups.front().begin));
@@ -274,6 +299,23 @@ struct ViewModel
                     return group.second;
                 });
         }
+
+        {
+            vector<pair<milliseconds, float>> groups = model.groupedtweets |
+                ranges::view::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                    return make_pair(group.first.begin, static_cast<float>(group.second->toxic));
+                });
+
+            groups |=
+                ranges::action::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
+                    return l.first < r.first;
+                });
+
+            data->toxictpm = groups |
+                ranges::view::transform([&](const pair<milliseconds, float>& group){
+                    return group.second;
+                });
+        }
     }
 
     Model m;
@@ -284,10 +326,12 @@ struct ViewModel
         vector<WordCount> allwords;
         vector<WordCount> negativewords;
         vector<WordCount> positivewords;
-
+        vector<WordCount> toxicwords;
+        
         vector<float> groupedtpm;
         vector<float> positivetpm;
         vector<float> negativetpm;
+        vector<float> toxictpm;
         float maxtpm = 0.0f;
 
         string scope_begin = {};

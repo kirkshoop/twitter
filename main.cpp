@@ -741,7 +741,10 @@ int main(int argc, const char *argv[])
             start_with(noop));
     }
 
+    //
     // send tweet text to sentiment api service.
+    //
+
     auto sentimentupdates = ts |
         onlytweets() |
         buffer_with_time(milliseconds(500), tweetthread) |
@@ -780,8 +783,8 @@ int main(int argc, const char *argv[])
                     });
                 });
         }) |
-        merge(poolthread) |
-        nooponerror() |
+        merge() |
+        nooponerror("sentiment") |
         start_with(noop) | 
         as_dynamic();
 
@@ -789,6 +792,57 @@ int main(int argc, const char *argv[])
         useSentimentApi |
             rxo::map([=](bool use){
                 return use ? sentimentupdates : just(noop) | as_dynamic();
+            }) |
+            switch_on_next()
+    );
+
+    //
+    // send tweet text to perspective api service.
+    //
+    
+    auto perspectiveupdates = ts |
+        onlytweets() |
+        rxo::map([=](const Tweet& tw) -> observable<Reducer> {
+            auto text = tweettext(tw.data->tweet);
+            auto ts = timestamp_ms(tw);
+            return perspectiverequest(poolthread, factory, settings["PerspectiveUrl"].get<string>(), settings["PerspectiveKey"].get<string>(), text) |
+                rxo::map([=](const string& body){
+                    auto response = json::parse(body);
+
+                    return Reducer([=](Model& m){
+                        auto& scores = response["attributeScores"];
+
+                        Perspective result{
+                            scores["TOXICITY"]["summaryScore"]["value"].get<float>(), 
+                            scores["SPAM"]["summaryScore"]["value"].get<float>(), 
+                            scores["INFLAMMATORY"]["summaryScore"]["value"].get<float>()
+                        };
+
+                        m.data->perspective[tw.data->tweet["id_str"]] = result;
+
+                        auto toxic = result.toxicity > 0.7f;
+
+                        for (auto& word: tw.data->words) {
+                            toxic && ++m.data->toxicwords[word];
+                        }
+
+                        updategroups(m, ts, length, [&](TweetGroup& tg){
+                            toxic && ++tg.toxic;
+                        });
+
+                        return std::move(m);
+                    });
+                });
+        }) |
+        merge() |
+        nooponerror("perspective") |
+        start_with(noop) | 
+        as_dynamic();
+
+    reducers.push_back(
+        usePerspectiveApi |
+            rxo::map([=](bool use){
+                return use ? perspectiveupdates : just(noop) | as_dynamic();
             }) |
             switch_on_next()
     );
@@ -1274,6 +1328,15 @@ int main(int argc, const char *argv[])
 
                 // by group
 
+                if (ImGui::CollapsingHeader("Toxic Tweets Per Minute", ImGuiTreeNodeFlags_Framed))
+                {
+                    auto& tpm = vm.data->toxictpm;
+                    ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
+                    ImGui::PushStyleColor(ImGuiCol_PlotLines, negativecolor);
+                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, vm.data->maxtpm, plotextent);
+                    ImGui::PopStyleColor(1);
+                }
+
                 if (ImGui::CollapsingHeader("Negative Tweets Per Minute", ImGuiTreeNodeFlags_Framed))
                 {
                     auto& tpm = vm.data->negativetpm;
@@ -1330,6 +1393,7 @@ int main(int argc, const char *argv[])
                 ImGui::RadioButton("Selected", &model::scope, scope_selected); ImGui::SameLine();
                 ImGui::RadioButton("All -", &model::scope, scope_all_negative); ImGui::SameLine();
                 ImGui::RadioButton("All +", &model::scope, scope_all_positive); ImGui::SameLine();
+                ImGui::RadioButton("All \u2620", &model::scope, scope_all_toxic); ImGui::SameLine();
                 ImGui::RadioButton("All", &model::scope, scope_all);
 
                 ImGui::Text("%s -> %s", vm.data->scope_begin.c_str(), vm.data->scope_end.c_str());
@@ -1374,16 +1438,20 @@ int main(int argc, const char *argv[])
 
                 for (auto& w : top) {
 
-                    ImGui::Text("%4.d,", model::scope == scope_selected ? w.count : m.allwords[w.word]); ImGui::SameLine();
+                    auto total = m.allwords[w.word];
+                    ImGui::Text("%4.d,", total); ImGui::SameLine();
                     auto positive = m.positivewords[w.word];
                     ImGui::TextColored(positivecolor, " +%4.d,", positive); ImGui::SameLine();
                     auto negative = m.negativewords[w.word];
                     ImGui::TextColored(negativecolor, " -%4.d", negative); ImGui::SameLine();
+                    auto toxic = m.toxicwords[w.word];
+                    ImGui::TextColored(negativecolor, " \u2620%4.d", toxic); ImGui::SameLine();
                     if (negative > positive) {
                         ImGui::TextColored(negativecolor, " -%6.2fx", negative / std::max(float(positive), 1.0f)); ImGui::SameLine();
                     } else {
                         ImGui::TextColored(positivecolor, " +%6.2fx", positive / std::max(float(negative), 1.0f)); ImGui::SameLine();
                     }
+                    ImGui::TextColored(negativecolor, " \u2620%6.2fx", total / std::max(float(toxic), 1.0f)); ImGui::SameLine();
                     ImGui::Text(" - %s", w.word.c_str());
 
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
@@ -1426,7 +1494,7 @@ int main(int argc, const char *argv[])
                 static vector<ImRect> taken;
                 taken.clear();
 
-                // start a reproducable series each frame.
+                // start a reproducible series each frame.
                 mt19937 source;
 
                 auto maxCount = 0;
@@ -1437,7 +1505,12 @@ int main(int argc, const char *argv[])
 
                     maxCount = max(maxCount, cursor->count);
 
-                    auto color = cursor->word[0] == '@' ? mentioncolor : cursor->word[0] == '#' ? hashtagcolor : textcolor;
+                    auto fallbackcolor = textcolor;
+                    fallbackcolor = m.allwords[cursor->word] < m.negativewords[cursor->word] ? negativecolor : fallbackcolor;
+                    fallbackcolor = m.negativewords[cursor->word] < m.positivewords[cursor->word] ? positivecolor : fallbackcolor;
+                    fallbackcolor = m.positivewords[cursor->word] < m.toxicwords[cursor->word] ? negativecolor : fallbackcolor;
+
+                    auto color = cursor->word[0] == '@' ? mentioncolor : cursor->word[0] == '#' ? hashtagcolor : fallbackcolor;
                     auto place = Clamp(static_cast<float>(cursor->count)/maxCount, 0.0f, 0.9999f);
                     auto size = Clamp(font->FontSize*scale*place, font->FontSize*scale*0.25f, font->FontSize*scale);
                     auto extent = font->CalcTextSizeA(size, fltmax, 0.0f, &cursor->word[0], &cursor->word[0] + cursor->word.size(), nullptr);
@@ -1485,7 +1558,7 @@ int main(int argc, const char *argv[])
                     ImGui::ColorEdit3("positivecolor", reinterpret_cast<float*>(&positivecolor), ImGuiColorEditFlags_Float);
                     ImGui::ColorEdit3("neutralcolor", reinterpret_cast<float*>(&neutralcolor), ImGuiColorEditFlags_Float);
                     ImGui::ColorEdit3("negativecolor", reinterpret_cast<float*>(&negativecolor), ImGuiColorEditFlags_Float);
-
+                    
                     if (ImGui::Button("Close"))
                         ImGui::CloseCurrentPopup();
                 }
@@ -1508,14 +1581,17 @@ int main(int argc, const char *argv[])
                         auto name = tweet["user"]["name"].get<string>();
                         auto screenName = tweet["user"]["screen_name"].get<string>();
                         auto sentiment = m.sentiment[tweet["id_str"]];
+                        auto perspective = m.perspective[tweet["id_str"]];
                         auto color = sentiment == "positive" ? positivecolor : sentiment == "negative" ? negativecolor : neutralcolor;
                         auto text = tweettext(tweet);
                         auto passSentiment = model::scope == scope_all_negative ? sentiment == "negative" : model::scope == scope_all_positive ? sentiment == "positive" : true;
-                        if (passSentiment && (filter.PassFilter(name.c_str()) || filter.PassFilter(screenName.c_str()) || filter.PassFilter(text.c_str()))) {
+                        auto passPerspective = model::scope == scope_all_toxic ? perspective.toxicity > 0.7f : true;
+                        if (passSentiment && passPerspective && (filter.PassFilter(name.c_str()) || filter.PassFilter(screenName.c_str()) || filter.PassFilter(text.c_str()))) {
                             --remaining;
                             ImGui::Separator();
                             ImGui::Text("%s (@%s) - ", name.c_str() , screenName.c_str() ); ImGui::SameLine();
-                            ImGui::TextColored(color, "%s", sentiment.c_str());
+                            ImGui::TextColored(color, "%s", sentiment.c_str()); ImGui::SameLine();
+                            ImGui::Text(" \u2620%6.2f, %6.2f, %6.2f", perspective.toxicity, perspective.spam, perspective.inflammatory);
                             ImGui::TextWrapped("%s", text.c_str());
                         }
                     }

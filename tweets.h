@@ -245,8 +245,7 @@ auto twitterrequest = [](observe_on_one_worker tweetthread, ::rxcurl::rxcurl fac
             finally([](){cerr << "end twitter stream request" << endl;}) |
             merge(tweetthread);
     }) |
-    twitter_stream_reconnection(tweetthread) | 
-    subscribe_on(tweetthread);
+    twitter_stream_reconnection(tweetthread);
 };
 
 auto sentimentrequest = [](observe_on_one_worker worker, ::rxcurl::rxcurl factory, string url, string key, vector<string> text) -> observable<string> {
@@ -276,9 +275,32 @@ auto sentimentrequest = [](observe_on_one_worker worker, ::rxcurl::rxcurl factor
             tap([=](exception_ptr){
                 cout << body << endl;
             });
-    }) |
-    subscribe_on(worker);
+    });
 };
 
+auto perspectiverequest = [](observe_on_one_worker worker, ::rxcurl::rxcurl factory, string url, string key, string text) -> observable<string> {
+
+    std::map<string, string> headers;
+    headers["Content-Type"] = "application/json";
+
+    url += "?key=" + key;
+
+    auto body = json::parse(R"({"comment": {"text": ""}, "languages": ["en"], "requestedAttributes": {"TOXICITY":{}, "INFLAMMATORY":{}, "SPAM":{}}, "doNotStore": true })");
+
+    body["comment"]["text"] = text;
+
+    return observable<>::defer([=]() -> observable<string> {
+
+        return factory.create(http_request{url, "POST", headers, body.dump()}) |
+            rxo::map([](http_response r){
+                return r.body.complete;
+            }) |
+            merge(worker) |
+            tap([=](exception_ptr){
+                cout << body << endl;
+            });
+    });
+};
+    
 
 }
