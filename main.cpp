@@ -210,6 +210,7 @@ int main(int argc, const char *argv[])
         settings["Language"] = "en";
     }
 
+    // twitter api creds
     if (settings.count("ConsumerKey") == 0) {
         settings["ConsumerKey"] = string{};
     }
@@ -222,11 +223,29 @@ int main(int argc, const char *argv[])
     if (settings.count("AccessTokenSecret") == 0) {
         settings["AccessTokenSecret"] = string{};
     }
+
+    // azure ml api creds
     if (settings.count("SentimentUrl") == 0) {
         settings["SentimentUrl"] = string{};
     }
     if (settings.count("SentimentKey") == 0) {
         settings["SentimentKey"] = string{};
+    }
+
+    if (settings.count("SentimentRequests") == 0) {
+        settings["SentimentRequests"] = "Off";
+    }
+
+    // google api creds
+    if (settings.count("PerspectiveUrl") == 0) {
+        settings["PerspectiveUrl"] = string{};
+    }
+    if (settings.count("PerspectiveKey") == 0) {
+        settings["PerspectiveKey"] = string{};
+    }
+
+    if (settings.count("PerspectiveRequests") == 0) {
+        settings["PerspectiveRequests"] = "Off";
     }
 
     //cerr << setw(2) << settings << endl;
@@ -421,6 +440,45 @@ int main(int argc, const char *argv[])
     // initial update
     update_settings(settings);
 
+    /* filter settings updates to changes in the sentiment api settings.
+
+       debounce is used to wait until the updates pause before signaling a change.
+
+       distinct_until_changed is used to filter out settings updates that do not change the value
+    */
+    auto useSentimentApi = setting_updates |
+    rxo::map([=](const json& settings){
+        string use = tolower(settings["SentimentRequests"].get<std::string>());
+        bool haveurl = settings.count("SentimentUrl") > 0 && !settings["SentimentUrl"].get<std::string>().empty();
+        bool havekey = settings.count("SentimentKey") > 0 && !settings["SentimentKey"].get<std::string>().empty();
+        return use == "on" && haveurl && havekey;
+    }) |
+    debounce(milliseconds(500), mainthread) |
+    distinct_until_changed() |
+    replay(1) |
+    ref_count() |
+    as_dynamic();
+
+    /* filter settings updates to changes in the perspective api settings.
+
+       debounce is used to wait until the updates pause before signaling a change.
+
+       distinct_until_changed is used to filter out settings updates that do not change the value
+    */
+    auto usePerspectiveApi = setting_updates |
+    rxo::map([=](const json& settings){
+        string use = tolower(settings["PerspectiveRequests"].get<std::string>());
+        bool haveurl = settings.count("PerspectiveUrl") > 0 && !settings["PerspectiveUrl"].get<std::string>().empty();
+        bool havekey = settings.count("PerspectiveKey") > 0 && !settings["PerspectiveKey"].get<std::string>().empty();
+        return use == "on" && haveurl && havekey;
+    }) |
+    debounce(milliseconds(500), mainthread) |
+    distinct_until_changed() |
+    replay(1) |
+    ref_count() |
+    as_dynamic();
+
+
     /* filter settings updates to changes that change the url for the twitter stream.
 
        distinct_until_changed is used to filter out settings updates that do not change the url
@@ -443,12 +501,12 @@ int main(int argc, const char *argv[])
             }
             return url;
         }) |
-        distinct_until_changed() |
         debounce(milliseconds(1000), mainthread) |
+        distinct_until_changed() |
         tap([](string url){
             cerr << "url = " << url.c_str() << endl;
         }) |
-        replay(1, mainthread) |
+        replay(1) |
         ref_count() |
         as_dynamic();
 
@@ -683,8 +741,8 @@ int main(int argc, const char *argv[])
             start_with(noop));
     }
 
-    reducers.push_back(
-        ts |
+    // send tweet text to sentiment api service.
+    auto sentimentupdates = ts |
         onlytweets() |
         buffer_with_time(milliseconds(500), tweetthread) |
         filter([](const vector<Tweet>& tws){ return !tws.empty(); }) |
@@ -724,7 +782,16 @@ int main(int argc, const char *argv[])
         }) |
         merge(poolthread) |
         nooponerror() |
-        start_with(noop));
+        start_with(noop) | 
+        as_dynamic();
+
+    reducers.push_back(
+        useSentimentApi |
+            rxo::map([=](bool use){
+                return use ? sentimentupdates : just(noop) | as_dynamic();
+            }) |
+            switch_on_next()
+    );
 
     // group tweets, that arrive, by the timestamp_ms value
     reducers.push_back(
@@ -1104,6 +1171,22 @@ int main(int argc, const char *argv[])
                             settings["SentimentKey"] = sentimentkey;
                             changed = true;
                         }
+
+                        static string perspectiveurl(settings.count("PerspectiveUrl") > 0 ? settings["PerspectiveUrl"].get<string>() : string{});
+                        perspectiveurl.reserve(1024);
+                        if (ImGui::InputText("Perspective Url", &perspectiveurl[0], perspectiveurl.capacity())) {
+                            perspectiveurl.resize(strlen(&perspectiveurl[0]));
+                            settings["PerspectiveUrl"] = perspectiveurl;
+                            changed = true;
+                        }
+
+                        static string perspectivekey(settings.count("PerspectiveKey") > 0 ? settings["PerspectiveKey"].get<string>() : string{});
+                        perspectivekey.reserve(1024);
+                        if (ImGui::InputText("Perspective Key", &perspectivekey[0], perspectivekey.capacity(), textflags)) {
+                            perspectivekey.resize(strlen(&perspectivekey[0]));
+                            settings["PerspectiveKey"] = perspectivekey;
+                            changed = true;
+                        }
                     }
 
                     static int minutestokeep = keep.count();
@@ -1133,7 +1216,7 @@ int main(int argc, const char *argv[])
                     }
                     ImGui::ListBoxFooter();
 
-                    if (settings["Query"]["Action"].get<std::string>() == "filter") {
+                    if (tolower(settings["Query"]["Action"].get<std::string>()) == "filter") {
                         ImGui::Indent();
                         RXCPP_UNWIND(Unindent, [](){
                             ImGui::Unindent();
@@ -1152,6 +1235,19 @@ int main(int argc, const char *argv[])
                     if (ImGui::InputText("Language", &language[0], language.capacity())) {
                         language.resize(strlen(&language[0]));
                         settings["Language"] = language;
+                        changed = true;
+                    }
+
+
+                    static bool sentimentRequests(settings.count("SentimentRequests") > 0 && tolower(settings["SentimentRequests"].get<string>()) == "on");
+                    if (ImGui::Checkbox("Call Sentiment Api", &sentimentRequests)) {
+                        settings["SentimentRequests"] = sentimentRequests ? "On" : "Off";
+                        changed = true;
+                    }
+
+                    static bool perspectiveRequests(settings.count("PerspectiveRequests") > 0 && tolower(settings["PerspectiveRequests"].get<string>()) == "on");
+                    if (ImGui::Checkbox("Call Perspective Api", &perspectiveRequests)) {
+                        settings["PerspectiveRequests"] = perspectiveRequests ? "On" : "Off";
                         changed = true;
                     }
 
@@ -1313,8 +1409,8 @@ int main(int argc, const char *argv[])
                         ImGui::EndPopup();
                     });
 
-                    ImGui::ColorEdit3("hashtagcolor", reinterpret_cast<float*>(&hashtagcolor));
-                    ImGui::ColorEdit3("mentioncolor", reinterpret_cast<float*>(&mentioncolor));
+                    ImGui::ColorEdit3("hashtagcolor", reinterpret_cast<float*>(&hashtagcolor), ImGuiColorEditFlags_Float);
+                    ImGui::ColorEdit3("mentioncolor", reinterpret_cast<float*>(&mentioncolor), ImGuiColorEditFlags_Float);
 
                     if (ImGui::Button("Close"))
                         ImGui::CloseCurrentPopup();
@@ -1386,9 +1482,9 @@ int main(int argc, const char *argv[])
                         ImGui::EndPopup();
                     });
 
-                    ImGui::ColorEdit3("positivecolor", reinterpret_cast<float*>(&positivecolor));
-                    ImGui::ColorEdit3("neutralcolor", reinterpret_cast<float*>(&neutralcolor));
-                    ImGui::ColorEdit3("negativecolor", reinterpret_cast<float*>(&negativecolor));
+                    ImGui::ColorEdit3("positivecolor", reinterpret_cast<float*>(&positivecolor), ImGuiColorEditFlags_Float);
+                    ImGui::ColorEdit3("neutralcolor", reinterpret_cast<float*>(&neutralcolor), ImGuiColorEditFlags_Float);
+                    ImGui::ColorEdit3("negativecolor", reinterpret_cast<float*>(&negativecolor), ImGuiColorEditFlags_Float);
 
                     if (ImGui::Button("Close"))
                         ImGui::CloseCurrentPopup();
