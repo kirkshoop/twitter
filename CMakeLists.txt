@@ -74,7 +74,7 @@ set(SAMPLE_RESOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui.ini
     ${CMAKE_CURRENT_SOURCE_DIR}/NotoMono-Regular.ttf
     ${CMAKE_CURRENT_SOURCE_DIR}/NotoSansSymbols-Regular.ttf
-    ${CMAKE_CURRENT_SOURCE_DIR}/dash.wav
+    ${CMAKE_CURRENT_SOURCE_DIR}/dot.wav
 )
 
 add_executable(${SAMPLE_PROJECT} ${SAMPLE_SOURCES} ${SAMPLE_RESOURCES})
@@ -110,36 +110,36 @@ set_source_files_properties(${SAMPLE_RESOURCES} PROPERTIES
     HEADER_FILE_ONLY ON
     MACOSX_PACKAGE_LOCATION Resources)
 
-set(Boost_USE_STATIC_LIBS OFF)
-set(Boost_USE_MULTITHREADED ON)
-set(Boost_USE_STATIC_RUNTIME OFF)
-find_package(Boost COMPONENTS thread) 
+# set(Boost_USE_STATIC_LIBS OFF)
+# set(Boost_USE_MULTITHREADED ON)
+# set(Boost_USE_STATIC_RUNTIME OFF)
+# find_package(Boost COMPONENTS thread) 
 
-MESSAGE( STATUS "Boost_VERSION: " ${Boost_VERSION} )
+# MESSAGE( STATUS "Boost_VERSION: " ${Boost_VERSION} )
 
-set(FUTURE_PROJECT
-    future)
+# set(FUTURE_PROJECT
+#     future)
 
-add_executable(${FUTURE_PROJECT} future.cpp ${SAMPLE_RESOURCES})
+# add_executable(${FUTURE_PROJECT} future.cpp ${SAMPLE_RESOURCES})
 
-target_compile_options(${FUTURE_PROJECT} PUBLIC ${SHARED_COMPILE_OPTIONS})
-target_compile_features(${FUTURE_PROJECT} PUBLIC ${SHARED_COMPILE_FEATURES})
-target_compile_definitions(${FUTURE_PROJECT} PUBLIC 
-    BOOST_THREAD_VERSION=4 
-    BOOST_THREAD_PROVIDES_FUTURE_CONTINUATION=1)
+# target_compile_options(${FUTURE_PROJECT} PUBLIC ${SHARED_COMPILE_OPTIONS})
+# target_compile_features(${FUTURE_PROJECT} PUBLIC ${SHARED_COMPILE_FEATURES})
+# target_compile_definitions(${FUTURE_PROJECT} PUBLIC 
+#     BOOST_THREAD_VERSION=4 
+#     BOOST_THREAD_PROVIDES_FUTURE_CONTINUATION=1)
 
-target_include_directories(${FUTURE_PROJECT} SYSTEM PUBLIC 
-    ${Boost_INCLUDE_DIRS}
-    ${range-v3_INCLUDE_DIR} 
-    ${LIBOAUTH_INCLUDE_DIRS} 
-    ${CURL_INCLUDE_DIRS}
-    ${jsoncpp_INCLUDE_DIR})
+# target_include_directories(${FUTURE_PROJECT} SYSTEM PUBLIC 
+#     ${Boost_INCLUDE_DIRS}
+#     ${range-v3_INCLUDE_DIR} 
+#     ${LIBOAUTH_INCLUDE_DIRS} 
+#     ${CURL_INCLUDE_DIRS}
+#     ${jsoncpp_INCLUDE_DIR})
 
-target_link_libraries(${FUTURE_PROJECT} 
-    ${Boost_LIBRARIES}
-    ${CMAKE_THREAD_LIBS_INIT} 
-    ${LIBOAUTH_LIBRARY} 
-    ${CURL_LIBRARIES})
+# target_link_libraries(${FUTURE_PROJECT} 
+#     ${Boost_LIBRARIES}
+#     ${CMAKE_THREAD_LIBS_INIT} 
+#     ${LIBOAUTH_LIBRARY} 
+#     ${CURL_LIBRARIES})
 
 # configure unit tests via CTest
 enable_testing()

@@ -290,13 +290,6 @@ int main(int argc, const char *argv[])
         return -1;
     }
 
-    Mix_Chunk *dash = Mix_LoadWAV((exeparent + "/Resources/dash.wav").c_str());
-    if (dash == NULL)
-    {
-        printf("Mix_LoadWAV dash - Error: %s\n", SDL_GetError());
-        return -1;
-    }
-
     Mix_Chunk *dot = Mix_LoadWAV((exeparent + "/Resources/dot.wav").c_str());
     if (dot == NULL)
     {
@@ -377,7 +370,6 @@ int main(int argc, const char *argv[])
         SDL_GL_DeleteContext(glcontext);
         SDL_DestroyWindow(window);
         Mix_FreeChunk(dot);
-        Mix_FreeChunk(dash);
 	    Mix_CloseAudio();
         SDL_Quit();
     });

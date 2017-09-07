@@ -64,6 +64,7 @@ struct http_state
             auto localheaders = headers;
             auto localrxcurl = rxcurl;
             auto localRequest = request;
+            chunkbus.get_subscription().unsubscribe();
             subscriber<string>* localChunkout = chunkout.release();
             rxcurl->worker
                 .take(1)
