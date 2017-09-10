@@ -794,6 +794,13 @@ int main(int argc, const char *argv[])
     
     auto perspectiveupdates = ts |
         onlytweets() |
+        // perspective api has 10 QPS limit (eval @ 100s)
+        window_with_time(seconds(1), poolthread) |
+        rxo::map([](observable<Tweet> tws){
+            // take only first 10 from each second
+            return tws.take(10);
+        }) |
+        merge() |
         rxo::map([=](const Tweet& tw) -> observable<Reducer> {
             auto text = tweettext(tw.data->tweet);
             auto ts = timestamp_ms(tw);
@@ -1443,7 +1450,7 @@ int main(int argc, const char *argv[])
                     } else {
                         ImGui::TextColored(positivecolor, " +%6.2fx", positive / std::max(float(negative), 1.0f)); ImGui::SameLine();
                     }
-                    ImGui::TextColored(negativecolor, " \u2620%6.2fx", total / std::max(float(toxic), 1.0f)); ImGui::SameLine();
+                    ImGui::Text(" \u2620%6.2fx", toxic / std::max(float(total-toxic), 1.0f)); ImGui::SameLine();
                     ImGui::Text(" - %s", w.word.c_str());
 
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
@@ -1461,16 +1468,17 @@ int main(int argc, const char *argv[])
                 });
 
                 static const ImVec4 textcolor = ImGui::GetStyle().Colors[ImGuiCol_Text];
-                static ImVec4 hashtagcolor = ImColor(0, 230, 0);
-                static ImVec4 mentioncolor = ImColor(0, 200, 230);
+//                static ImVec4 hashtagcolor = ImColor(0, 230, 0);
+//                static ImVec4 mentioncolor = ImColor(0, 200, 230);
                 if (ImGui::BeginPopupContextWindow())
                 {
                     RXCPP_UNWIND_AUTO([](){
                         ImGui::EndPopup();
                     });
 
-                    ImGui::ColorEdit3("hashtagcolor", reinterpret_cast<float*>(&hashtagcolor), ImGuiColorEditFlags_Float);
-                    ImGui::ColorEdit3("mentioncolor", reinterpret_cast<float*>(&mentioncolor), ImGuiColorEditFlags_Float);
+                    ImGui::ColorEdit3("positivecolor", reinterpret_cast<float*>(&positivecolor), ImGuiColorEditFlags_Float);
+                    ImGui::ColorEdit3("neutralcolor", reinterpret_cast<float*>(&neutralcolor), ImGuiColorEditFlags_Float);
+                    ImGui::ColorEdit3("negativecolor", reinterpret_cast<float*>(&negativecolor), ImGuiColorEditFlags_Float);
 
                     if (ImGui::Button("Close"))
                         ImGui::CloseCurrentPopup();
@@ -1497,12 +1505,11 @@ int main(int argc, const char *argv[])
 
                     maxCount = max(maxCount, cursor->count);
 
-                    auto fallbackcolor = textcolor;
-                    fallbackcolor = m.allwords[cursor->word] < m.negativewords[cursor->word] ? negativecolor : fallbackcolor;
-                    fallbackcolor = m.negativewords[cursor->word] < m.positivewords[cursor->word] ? positivecolor : fallbackcolor;
-                    fallbackcolor = m.positivewords[cursor->word] < m.toxicwords[cursor->word] ? negativecolor : fallbackcolor;
+                    auto color = textcolor;
+                    color = m.allwords[cursor->word] < m.negativewords[cursor->word] ? negativecolor : color;
+                    color = m.negativewords[cursor->word] < m.positivewords[cursor->word] ? positivecolor : color;
+                    color = m.positivewords[cursor->word] < m.toxicwords[cursor->word] ? negativecolor : color;
 
-                    auto color = cursor->word[0] == '@' ? mentioncolor : cursor->word[0] == '#' ? hashtagcolor : fallbackcolor;
                     auto place = Clamp(static_cast<float>(cursor->count)/maxCount, 0.0f, 0.9999f);
                     auto size = Clamp(font->FontSize*scale*place, font->FontSize*scale*0.25f, font->FontSize*scale);
                     auto extent = font->CalcTextSizeA(size, fltmax, 0.0f, &cursor->word[0], &cursor->word[0] + cursor->word.size(), nullptr);
