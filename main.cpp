@@ -1027,6 +1027,7 @@ int main(int argc, const char *argv[])
                 for (;cursor!=end; ++cursor) {
                     auto sentiment = m.sentiment[cursor->data->tweet["id_str"].get<string>()];
                     m.sentiment.erase(cursor->data->tweet["id_str"].get<string>());
+                    auto perspective = m.perspective[cursor->data->tweet["id_str"].get<string>()];
                     for (auto& word: cursor->data->words) {
                         if (--m.allwords[word] == 0)
                         {
@@ -1039,6 +1040,10 @@ int main(int argc, const char *argv[])
                         if (sentiment == "positive" && --m.positivewords[word] == 0)
                         {
                             m.positivewords.erase(word);
+                        }
+                        if (perspective.toxicity > 0.7f && --m.toxicwords[word] == 0)
+                        {
+                            m.toxicwords.erase(word);
                         }
                     }
                 }
@@ -1136,7 +1141,7 @@ int main(int argc, const char *argv[])
             static ImVec4 neutralcolor = ImColor(250, 150, 0);
             static ImVec4 positivecolor = ImColor(50, 230, 50);
             static ImVec4 negativecolor = ImColor(240, 33, 33);
-
+            
             ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Live Analysis")) {
                 RXCPP_UNWIND(End, [](){
@@ -1332,7 +1337,8 @@ int main(int argc, const char *argv[])
                     auto& tpm = vm.data->toxictpm;
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
                     ImGui::PushStyleColor(ImGuiCol_PlotLines, negativecolor);
-                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, vm.data->maxtpm, plotextent);
+                    // perspective api limits to 10 QPS so the max for the graph cannot exceed 10 * 60 TPM
+                    ImGui::PlotLines("", &tpm[0], tpm.size(), 0, nullptr, 0.0f, std::min(vm.data->maxtpm, 10.0f * 60), plotextent);
                     ImGui::PopStyleColor(1);
                 }
 
@@ -1450,7 +1456,7 @@ int main(int argc, const char *argv[])
                     } else {
                         ImGui::TextColored(positivecolor, " +%6.2fx", positive / std::max(float(negative), 1.0f)); ImGui::SameLine();
                     }
-                    ImGui::Text(" \u2620%6.2fx", toxic / std::max(float(total-toxic), 1.0f)); ImGui::SameLine();
+                    ImGui::Text(" \u2620%6.2fx", toxic / std::max(float(std::min(total, 10 * 60)-toxic), 1.0f)); ImGui::SameLine();
                     ImGui::Text(" - %s", w.word.c_str());
 
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
@@ -1468,8 +1474,6 @@ int main(int argc, const char *argv[])
                 });
 
                 static const ImVec4 textcolor = ImGui::GetStyle().Colors[ImGuiCol_Text];
-//                static ImVec4 hashtagcolor = ImColor(0, 230, 0);
-//                static ImVec4 mentioncolor = ImColor(0, 200, 230);
                 if (ImGui::BeginPopupContextWindow())
                 {
                     RXCPP_UNWIND_AUTO([](){
@@ -1505,11 +1509,18 @@ int main(int argc, const char *argv[])
 
                     maxCount = max(maxCount, cursor->count);
 
-                    auto color = textcolor;
-                    color = m.allwords[cursor->word] < m.negativewords[cursor->word] ? negativecolor : color;
-                    color = m.negativewords[cursor->word] < m.positivewords[cursor->word] ? positivecolor : color;
-                    color = m.positivewords[cursor->word] < m.toxicwords[cursor->word] ? negativecolor : color;
-
+                    auto neutral = m.allwords[cursor->word] - (m.negativewords[cursor->word] + m.positivewords[cursor->word]);
+                    using CountedColor = pair<int, ImVec4>;
+                    auto color = (std::array<CountedColor, 4>{{
+                        {neutral, textcolor}, 
+                        {m.negativewords[cursor->word], negativecolor},
+                        {m.positivewords[cursor->word], positivecolor},
+                        {m.toxicwords[cursor->word], negativecolor}
+                    }} |
+                    ranges::action::sort([](const CountedColor& l, const CountedColor& r){
+                        return l.first > r.first;
+                    }))[0].second;
+    
                     auto place = Clamp(static_cast<float>(cursor->count)/maxCount, 0.0f, 0.9999f);
                     auto size = Clamp(font->FontSize*scale*place, font->FontSize*scale*0.25f, font->FontSize*scale);
                     auto extent = font->CalcTextSizeA(size, fltmax, 0.0f, &cursor->word[0], &cursor->word[0] + cursor->word.size(), nullptr);
