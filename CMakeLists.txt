@@ -31,6 +31,9 @@ mark_as_advanced(LIBOAUTH INCLUDE_DIR LIBOAUTH_LIBRARY)
 
 MESSAGE( STATUS "LIBOAUTH_INCLUDE_DIRS: " ${LIBOAUTH_INCLUDE_DIRS} )
 
+find_package(FREETYPE REQUIRED)
+MESSAGE( STATUS "FREETYPE_INCLUDE_DIRS: " ${FREETYPE_INCLUDE_DIRS} )
+
 find_package(CURL REQUIRED)
 MESSAGE( STATUS "CURL_INCLUDE_DIRS: " ${CURL_INCLUDE_DIRS} )
 
@@ -60,13 +63,33 @@ MESSAGE( STATUS "rxcpp_INCLUDE_DIRS: " ${rxcpp_INCLUDE_DIR} )
 find_package(jsoncpp REQUIRED)
 MESSAGE( STATUS "jsoncpp_INCLUDE_DIR: " ${jsoncpp_INCLUDE_DIR} )
 
+find_package(imgui REQUIRED)
+MESSAGE( STATUS "imgui_INCLUDE_DIR: " ${imgui_INCLUDE_DIR} )
+
+add_library(imgui_w_freetype STATIC
+    ${imgui_INCLUDE_DIR}/imgui.cpp
+    ${imgui_INCLUDE_DIR}/imgui_draw.cpp
+    ${imgui_INCLUDE_DIR}/imgui_widgets.cpp
+    ${imgui_INCLUDE_DIR}/misc/freetype/imgui_freetype.cpp
+)
+
+target_compile_definitions(imgui_w_freetype PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLEW)
+target_compile_options(imgui_w_freetype PUBLIC ${SHARED_COMPILE_OPTIONS} -Wno-missing-field-initializers)
+target_compile_features(imgui_w_freetype PUBLIC ${SHARED_COMPILE_FEATURES})
+
+target_include_directories(imgui_w_freetype SYSTEM PUBLIC 
+    ${OPENGL_INCLUDE_DIRS} 
+    ${SDL2_INCLUDE_DIRS} 
+    ${SDLMIXER_INCLUDE_DIR} 
+    ${GLEW_INCLUDE_DIRS} 
+    ${FREETYPE_INCLUDE_DIRS}
+    ${imgui_INCLUDE_DIR}
+    ${imgui_INCLUDE_DIR}/examples
+)
+
 # define the sources
 set(SAMPLE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui_draw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui_demo.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/imgui/imgui_impl_sdl_gl3.cpp
 )
 
 # define the resources
@@ -78,11 +101,19 @@ set(SAMPLE_RESOURCES
 )
 
 add_executable(${SAMPLE_PROJECT} ${SAMPLE_SOURCES} ${SAMPLE_RESOURCES})
+add_dependencies(${SAMPLE_PROJECT} 
+    imgui 
+    imgui_w_freetype
+    jsoncpp 
+    rxcpp 
+    range-v3
+)
 
+target_compile_definitions(${SAMPLE_PROJECT} PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLEW)
 target_compile_options(${SAMPLE_PROJECT} PUBLIC ${SHARED_COMPILE_OPTIONS})
 target_compile_features(${SAMPLE_PROJECT} PUBLIC ${SHARED_COMPILE_FEATURES})
 
-target_include_directories(${SAMPLE_PROJECT} PUBLIC 
+target_include_directories(${SAMPLE_PROJECT} SYSTEM PUBLIC 
     ${rxcpp_INCLUDE_DIR} 
     ${range-v3_INCLUDE_DIR} 
     ${LIBOAUTH_INCLUDE_DIRS} 
@@ -91,12 +122,17 @@ target_include_directories(${SAMPLE_PROJECT} PUBLIC
     ${SDL2_INCLUDE_DIRS} 
     ${SDLMIXER_INCLUDE_DIR} 
     ${GLEW_INCLUDE_DIRS} 
-    ${jsoncpp_INCLUDE_DIR})
+    ${jsoncpp_INCLUDE_DIR}
+    ${FREETYPE_INCLUDE_DIRS}
+    ${imgui_INCLUDE_DIR}
+)
 
 target_link_libraries(${SAMPLE_PROJECT} 
+    imgui_w_freetype
     ${CMAKE_THREAD_LIBS_INIT} 
     ${LIBOAUTH_LIBRARY} 
     ${CURL_LIBRARIES} 
+    ${FREETYPE_LIBRARIES}
     ${OPENGL_LIBRARIES} 
     ${SDL2_LIBRARIES} 
     ${SDLMIXER_LIBRARY} 

@@ -17,13 +17,16 @@
 using namespace std;
 using namespace std::chrono;
 
-#include "imgui/imgui.h"
+#include <imgui.h>
+#include <misc/freetype/imgui_freetype.h>
 
-#include "imgui/imgui_internal.h"
+#include <imgui_internal.h>
 
-#include "imgui/imgui_impl_sdl_gl3.h"
-#include <GL/glew.h>
-#include <SDL.h>
+#include <imgui_impl_opengl2.h>
+#include <imgui_impl_sdl.h>
+#include <imgui_impl_opengl2.cpp>
+#include <imgui_impl_sdl.cpp>
+
 #include <SDL2/SDL_mixer.h>
 
 #include <oauth.h>
@@ -298,26 +301,31 @@ int main(int argc, const char *argv[])
     }
 
     // Setup window
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
     SDL_DisplayMode current;
     SDL_GetCurrentDisplayMode(0, &current);
-    SDL_Window *window = SDL_CreateWindow("Twitter Analysis (ImGui SDL2+OpenGL3)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE);
-    SDL_GLContext glcontext = SDL_GL_CreateContext(window);
-    glewInit();
+    SDL_Window* window = SDL_CreateWindow("Twitter Analysis (Dear ImGui SDL2+OpenGL)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE);
+    SDL_GLContext gl_context = SDL_GL_CreateContext(window);
+    SDL_GL_SetSwapInterval(1); // Enable vsync
 
-    // Setup ImGui binding
-    ImGui_ImplSdlGL3_Init(window);
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
 
+    // Setup Platform/Renderer bindings
+    ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
+    ImGui_ImplOpenGL2_Init();
 
-    ImGuiIO& io = ImGui::GetIO();
 
     io.IniFilename = inifile.c_str();
+
+    ImGui::StyleColorsDark();
 
     // Setup Fonts
 
@@ -330,32 +338,51 @@ int main(int argc, const char *argv[])
         0xfb01, 0xfb04,
         0xfeff, 0xfffd, 
         0 };
-    if (ifstream(exedir + "/NotoMono-Regular.ttf").good()) {
-        ++fontsadded;
-        io.Fonts->AddFontFromFileTTF((exedir + "/NotoMono-Regular.ttf").c_str(), 13.0f, nullptr, noto);
-    } else if (ifstream(exeparent + "/Resources/NotoMono-Regular.ttf").good()) {
-        ++fontsadded;
-        io.Fonts->AddFontFromFileTTF((exeparent + "/Resources/NotoMono-Regular.ttf").c_str(), 13.0f, nullptr, noto);
-    }
 
-    static ImFontConfig config;
-    config.MergeMode = true;
     static const ImWchar symbols[] = { 
         0x20a0, 0x2e3b, 
         0x3008, 0x3009, 
         0x4dc0, 0x4dff, 
         0xa700, 0xa71f, 
         0 };
-    if (ifstream(exedir + "/NotoSansSymbols-Regular.ttf").good()) {
+
+    ImVector<ImWchar> ranges;
+    ImFontAtlas::GlyphRangesBuilder builder;
+    builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
+    builder.AddRanges(io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+    builder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
+    builder.AddRanges(io.Fonts->GetGlyphRangesJapanese());
+    builder.AddRanges(io.Fonts->GetGlyphRangesKorean());
+    builder.AddRanges(io.Fonts->GetGlyphRangesThai());
+    builder.AddRanges(symbols);
+    builder.BuildRanges(&ranges);
+
+    if (!fontsadded && ifstream("/Library/Fonts/Arial Unicode.ttf").good()) {
+        ++fontsadded;
+        io.Fonts->AddFontFromFileTTF("/Library/Fonts/Arial Unicode.ttf", 16.0f, nullptr, ranges.Data);
+    }
+
+    if (!fontsadded && ifstream(exedir + "/NotoMono-Regular.ttf").good()) {
+        ++fontsadded;
+        io.Fonts->AddFontFromFileTTF((exedir + "/NotoMono-Regular.ttf").c_str(), 13.0f, nullptr, noto);
+    } else if (!fontsadded && ifstream(exeparent + "/Resources/NotoMono-Regular.ttf").good()) {
+        ++fontsadded;
+        io.Fonts->AddFontFromFileTTF((exeparent + "/Resources/NotoMono-Regular.ttf").c_str(), 13.0f, nullptr, noto);
+    }
+
+    static ImFontConfig config;
+    config.MergeMode = true;
+    if (!fontsadded && ifstream(exedir + "/NotoSansSymbols-Regular.ttf").good()) {
         ++fontsadded;
         io.Fonts->AddFontFromFileTTF((exedir + "/NotoSansSymbols-Regular.ttf").c_str(), 13.0f, &config, symbols);
-    } else if (ifstream(exeparent + "/Resources/NotoSansSymbols-Regular.ttf").good()) {
+    } else if (!fontsadded && ifstream(exeparent + "/Resources/NotoSansSymbols-Regular.ttf").good()) {
         ++fontsadded;
         io.Fonts->AddFontFromFileTTF((exeparent + "/Resources/NotoSansSymbols-Regular.ttf").c_str(), 13.0f, &config, symbols);
     }
 
     if (fontsadded) {
-        io.Fonts->Build();
+        ImGuiFreeType::BuildFontAtlas(io.Fonts, ImGuiFreeType::RasterizerFlags::LightHinting);
+        // io.Fonts->Build();
     }
 
     /* Define deinitialization procedure for graphic user interface in a SafeGuard pattern.
@@ -366,8 +393,10 @@ int main(int argc, const char *argv[])
        http://kirkshoop.github.io/2011/09/27/unwinder-should-be-in-standard-library.html
      */
     RXCPP_UNWIND_AUTO([&](){
-        ImGui_ImplSdlGL3_Shutdown();
-        SDL_GL_DeleteContext(glcontext);
+        ImGui_ImplOpenGL2_Shutdown();
+        ImGui_ImplSDL2_Shutdown();
+        ImGui::DestroyContext();
+        SDL_GL_DeleteContext(gl_context);
         SDL_DestroyWindow(window);
         Mix_FreeChunk(dot);
 	    Mix_CloseAudio();
@@ -612,8 +641,9 @@ int main(int argc, const char *argv[])
      */
     auto dumpjsonchanged = interval(every, tweetthread) |
         rxo::map([&](long){return dumpjson;}) |
+        start_with(dumpjson) |
         distinct_until_changed() |
-        publish() |
+        replay(1) |
         ref_count();
 
     /* Process tweets grouped by packs arrived during 'every' time granularity,
@@ -752,7 +782,7 @@ int main(int argc, const char *argv[])
                     auto response = json::parse(body);
                     return Reducer([=](Model& m){
                         auto combined = ranges::view::zip(response["Results"]["output1"], tws);
-                        for (const auto& b : combined) {
+                        ranges::for_each(combined, [&m](const auto& b) {
                             auto sentiment = get<0>(b);
                             auto tweet = get<1>(b).data->tweet;
                             auto ts = timestamp_ms(get<1>(b));
@@ -770,7 +800,7 @@ int main(int argc, const char *argv[])
                                 isNeg && ++tg.negative;
                                 isPos && ++tg.positive;
                             });
-                        }
+                        });
                         return std::move(m);
                     });
                 });
@@ -872,6 +902,95 @@ int main(int argc, const char *argv[])
                         ++tg.words[word];
                     }
                 });
+
+                return std::move(m);
+            });
+        }) |
+        nooponerror() |
+        start_with(noop));
+
+    // track users
+    reducers.push_back(
+        ts |
+        onlytweets() |
+        observe_on(poolthread) |
+        rxo::map([=](const Tweet& tw){
+            auto& tweet = tw.data->tweet;
+
+            return Reducer([=](Model& m){
+                auto t = timestamp_ms(tw);
+
+                auto update = [&](UserMap& userMap, const nlohmann::json& scope) {
+                    auto u = userMap.end();
+                    if (scope.count("user") > 0) {
+                        auto user = scope["user"];
+                        auto id = user["id_str"];
+                        u = userMap.find(id.get<string>());
+                        if (u == userMap.end()) {
+                            u = userMap.insert(make_pair(id.get<string>(), User{user, t})).first;
+                        }
+                    }
+                    return u;
+                };
+
+                auto& all = m.data->allusers;
+
+                User user;
+                auto u = update(all, tweet);
+                if (all.end() != u) {
+                    u->second.tweet(t);
+                    user = u->second;
+                }
+
+                User rtuser;
+                if (tweet.count("retweeted_status") > 0) {
+                    auto u = update(all, tweet["retweeted_status"]);
+                    if (all.end() != u) {
+                        u->second.retweet(t);
+                        rtuser = u->second;
+                    }
+                }
+
+                User qtuser;
+                if (tweet.count("quoted_status") > 0) {
+                    auto u = update(all, tweet["quoted_status"]);
+                    if (all.end() != u) {
+                        u->second.quote(t);
+                        qtuser = u->second;
+                    }
+                }
+
+                updategroups(m, t, length, [&](TweetGroup& tg){
+                    {
+                        auto u = update(tg.users, user.data->user);
+                        if (tg.users.end() != u) {
+                            u->second.tweet(t);
+                        }
+                    }
+
+                    if (rtuser.data) {
+                        auto u = update(tg.users, rtuser.data->user);
+                        if (tg.users.end() != u) {
+                            u->second.retweet(t);
+                        }
+                    }
+                    if (qtuser.data) {
+                        auto u = update(tg.users, qtuser.data->user);
+                        if (tg.users.end() != u) {
+                            u->second.quote(t);
+                        }
+                    }
+                });
+
+                // prune a user that is not active
+                auto first = t - (keep + length);
+                auto exp = find_if(all.begin(), all.end(), [=](const std::pair<string, User>& user){
+                    auto t = user.second.data->active.end;
+                    return t < first;
+                });
+                if (exp != all.end()) {
+                    all.erase(exp);
+                }
 
                 return std::move(m);
             });
@@ -1011,7 +1130,7 @@ int main(int argc, const char *argv[])
         onlytweets() |
         // batch the tweets to be more efficient about model updates
         // the trade off is adding latency to the model updates
-        buffer_with_time(milliseconds(200), poolthread) |
+        buffer_with_time(milliseconds(50), poolthread) |
         filter([](const vector<Tweet>& tws){ return !tws.empty(); }) |
         rxo::map([=](const vector<Tweet>& tws){
             return Reducer([=](Model& md){
@@ -1060,7 +1179,7 @@ int main(int argc, const char *argv[])
         onlytweets() |
         // batch the tweets to be more efficient about model updates
         // the trade off is adding latency to the model updates
-        window_with_time(milliseconds(200), poolthread) |
+        window_with_time(milliseconds(50), poolthread) |
         rxo::map([](observable<Tweet> source){
             auto tweetsperminute = source | count() | rxo::map([](int count){
                 return Reducer([=](Model& md){
@@ -1096,8 +1215,8 @@ int main(int argc, const char *argv[])
                 return std::move(m);
             }
         }) | 
-        // only view model updates every 200ms
-        sample_with_time(milliseconds(200), mainthread) |
+        // only view model updates every 50ms
+        sample_with_time(milliseconds(50), mainthread) |
         publish() |
         ref_count() |
         as_dynamic();
@@ -1253,26 +1372,23 @@ int main(int argc, const char *argv[])
                     keep = minutes(minutestokeep);
                     settings["Keep"] = keep.count();
 
-                    // capture size of previous control
-                    ImVec2 linesize = ImGui::GetItemRectSize();
-
                     ImGui::Separator();
 
-                    // make room for three
-                    linesize.y *= 3;
-
-                    ImGui::ListBoxHeader("Query", linesize);
-                    if (ImGui::Selectable("Sample", settings["Query"]["Action"].get<std::string>() == "sample")) {
-                        settings["Query"]["Action"] = "sample";
-                        settings["Query"].erase("Keywords");
-                        changed = true;
+                    if (ImGui::ListBoxHeader("Query", 2)) {
+                        RXCPP_UNWIND(ListBoxFooter, [](){
+                            ImGui::ListBoxFooter();
+                        });
+                        if (ImGui::Selectable("Sample", settings["Query"]["Action"].get<std::string>() == "sample")) {
+                            settings["Query"]["Action"] = "sample";
+                            settings["Query"].erase("Keywords");
+                            changed = true;
+                        }
+                        if (ImGui::Selectable("Filter", settings["Query"]["Action"].get<std::string>() == "filter")) {
+                            settings["Query"]["Action"] = "filter";
+                            settings["Query"]["Keywords"] = json::array();
+                            changed = true;
+                        }
                     }
-                    if (ImGui::Selectable("Filter", settings["Query"]["Action"].get<std::string>() == "filter")) {
-                        settings["Query"]["Action"] = "filter";
-                        settings["Query"]["Keywords"] = json::array();
-                        changed = true;
-                    }
-                    ImGui::ListBoxFooter();
 
                     if (tolower(settings["Query"]["Action"].get<std::string>()) == "filter") {
                         ImGui::Indent();
@@ -1388,6 +1504,43 @@ int main(int argc, const char *argv[])
                 End.dismiss();
             }
             ImGui::End();
+
+            // ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
+            // if (ImGui::Begin("Top Users from group")) {
+            //     RXCPP_UNWIND(End, [](){
+            //         ImGui::End();
+            //     });
+
+            //     static vector<UserCount> top;
+            //     top.clear();
+            //     top = *vm.data->scope_users |
+            //         ranges::view::filter([&](const UserCount& u){ return wordfilter.PassFilter(u.user.data->user["screen_name"].c_str()); }) |
+            //         ranges::view::take(10);
+
+            //     float maxCount = 0.0f;
+            //     // for(auto& w : m.groups) {
+            //     //     auto& g = m.groupedtweets.at(w);
+            //         for(auto& u : top) {
+            //             auto& counts = *(u.user.data);
+            //             float count = static_cast<float>(counts.retweets + counts.tweets + counts.quotetweets);
+            //             maxCount = count > maxCount ? count : maxCount;
+            //             u.all.push_back(count);
+            //         }
+            //     // }
+
+            //     for (auto& u : top) {
+            //         ImGui::Separator();
+            //         string name = u.user.data->user["name"].get<string>();
+            //         string screenName = u.user.data->user["screen_name"].get<string>();
+            //         ImGui::Text("%s (@%s)", name.c_str(), screenName.c_str());
+
+            //         ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
+            //         ImGui::PlotLines("", &u.all[0], u.all.size(), 0, nullptr, 0.0f, maxCount, plotextent);
+            //     }
+
+            //     End.dismiss();
+            // }
+            // ImGui::End();
 
             ImGui::SetNextWindowSize(ImVec2(100,200), ImGuiSetCond_FirstUseEver);
             if (ImGui::Begin("Top Words from group")) {
@@ -1610,6 +1763,7 @@ int main(int argc, const char *argv[])
                 End.dismiss();
             }
             ImGui::End();
+
         }) |
         reportandrepeat());
 
@@ -1753,8 +1907,12 @@ int main(int argc, const char *argv[])
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
-            ImGui_ImplSdlGL3_ProcessEvent(&event);
+            ImGui_ImplSDL2_ProcessEvent(&event);
             if (event.type == SDL_QUIT) {
+                lifetime.unsubscribe();
+                break;
+            }
+            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE && event.window.windowID == SDL_GetWindowID(window)) {
                 lifetime.unsubscribe();
                 break;
             }
@@ -1766,7 +1924,9 @@ int main(int argc, const char *argv[])
 
         Mix_PlayingMusic();
 
-        ImGui_ImplSdlGL3_NewFrame(window);
+        ImGui_ImplOpenGL2_NewFrame();
+        ImGui_ImplSDL2_NewFrame(window);
+        ImGui::NewFrame();
 
         while (!rl.empty() && rl.peek().when < rl.now()) {
             rl.dispatch();
@@ -1779,10 +1939,11 @@ int main(int argc, const char *argv[])
         }
 
         // Rendering
+        ImGui::Render();
         glViewport(0, 0, (int)ImGui::GetIO().DisplaySize.x, (int)ImGui::GetIO().DisplaySize.y);
         glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
         glClear(GL_COLOR_BUFFER_BIT);
-        ImGui::Render();
+        ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(window);
     }
 

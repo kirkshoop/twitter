@@ -32,6 +32,7 @@ set(SHARED_COMPILE_FEATURES
     cxx_nullptr
     cxx_decltype
     cxx_lambdas
+    cxx_generic_lambdas
     cxx_range_for
     cxx_right_angle_brackets
     cxx_rvalue_references
