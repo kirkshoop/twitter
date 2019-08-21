@@ -1,8 +1,7 @@
-# The Docker image to run your workspace in.
-image: BotCoin-RxCpp-TwetchAnalysis
+
 # Command to start on workspace startup (optional)
 tasks:
-  - init: apt-get install glut opengl yum yarn zip unzip file
+  - init: sudo apt-get install glut opengl yum yarn zip unzip file
 # Ports to expose on workspace startup (optional)
 ports:
   - port: 8000
