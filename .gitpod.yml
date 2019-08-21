@@ -1,6 +1,6 @@
 image:
-    file: docker/Dockerfile
+    file: Dockerfile
 ports:
 - port: 8000
 tasks:
-- command: apt-get install glut opengl yum yarn zip unzip file wget
+- command: mkdir build & cd build & cmake
