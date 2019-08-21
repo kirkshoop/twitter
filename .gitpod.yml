@@ -1,3 +1,4 @@
+image: nvidia/opengl
 ports:
 - port: 8000
 tasks:
