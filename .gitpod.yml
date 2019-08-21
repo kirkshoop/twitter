@@ -1,4 +1,5 @@
-image: nvidia:opengl
+image:
+    file: docker/Dockerfile
 ports:
 - port: 8000
 tasks:
