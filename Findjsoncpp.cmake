@@ -38,7 +38,7 @@ else()
   
   # Specify include dir
   ExternalProject_Get_Property(jsoncpp source_dir)
-  set(jsoncpp_INCLUDE_DIR ${source_dir}/src)
+  set(jsoncpp_INCLUDE_DIR ${source_dir}/include)
 endif()
 
 if(EXISTS "${jsoncpp_INCLUDE_DIR}")

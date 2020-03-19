@@ -40,4 +40,5 @@ set(SHARED_COMPILE_FEATURES
     cxx_alias_templates
     cxx_variadic_templates
     cxx_template_template_parameters
+    cxx_generic_lambdas
     )

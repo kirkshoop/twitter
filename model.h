@@ -51,8 +51,8 @@ inline vector<string> splitwords(const string& text) {
     }), words.end());
 
     words |= 
-        ranges::action::sort |
-        ranges::action::unique;
+        ranges::actions::sort |
+        ranges::actions::unique;
 
     return words;
 }
@@ -185,12 +185,13 @@ struct ViewModel
             data->scope_end = utctextfrom(duration_cast<seconds>(window.end));
 
             data->words = group->words |
-                ranges::view::transform([&](const pair<string, int>& word){
+                ranges::views::transform([&](const pair<string, int>& word){
                     return WordCount{word.first, word.second, {}};
-                });
+                }) |
+                ranges::to_vector;
 
             data->words |=
-                ranges::action::sort([](const WordCount& l, const WordCount& r){
+                ranges::actions::sort([](const WordCount& l, const WordCount& r){
                     return l.count > r.count;
                 });
         } else {
@@ -198,34 +199,37 @@ struct ViewModel
             if (scope == scope_all_negative) {
                 data->scope_words = &data->negativewords;
                 data->negativewords = model.negativewords |
-                    ranges::view::transform([&](const pair<string, int>& word){
+                    ranges::views::transform([&](const pair<string, int>& word){
                         return WordCount{word.first, word.second, {}};
-                    });
+                    }) |
+                ranges::to_vector;
 
                 data->negativewords |=
-                    ranges::action::sort([](const WordCount& l, const WordCount& r){
+                    ranges::actions::sort([](const WordCount& l, const WordCount& r){
                         return l.count > r.count;
                     });
             } else if (scope == scope_all_positive) {
                 data->scope_words = &data->positivewords;
                 data->positivewords = model.positivewords |
-                    ranges::view::transform([&](const pair<string, int>& word){
+                    ranges::views::transform([&](const pair<string, int>& word){
                         return WordCount{word.first, word.second, {}};
-                    });
+                    }) |
+                ranges::to_vector;
 
                 data->positivewords |=
-                    ranges::action::sort([](const WordCount& l, const WordCount& r){
+                    ranges::actions::sort([](const WordCount& l, const WordCount& r){
                         return l.count > r.count;
                     });
             } else if (scope == scope_all_toxic) {
                 data->scope_words = &data->toxicwords;
                 data->toxicwords = model.toxicwords |
-                    ranges::view::transform([&](const pair<string, int>& word){
+                    ranges::views::transform([&](const pair<string, int>& word){
                         return WordCount{word.first, word.second, {}};
-                    });
+                    }) |
+                ranges::to_vector;
 
                 data->toxicwords |=
-                    ranges::action::sort([](const WordCount& l, const WordCount& r){
+                    ranges::actions::sort([](const WordCount& l, const WordCount& r){
                         return l.count > r.count;
                     });
             } else {
@@ -233,12 +237,13 @@ struct ViewModel
             }
 
             data->allwords = model.allwords |
-                ranges::view::transform([&](const pair<string, int>& word){
+                ranges::views::transform([&](const pair<string, int>& word){
                     return WordCount{word.first, word.second, {}};
-                });
+                }) |
+                ranges::to_vector;
 
             data->allwords |=
-                ranges::action::sort([](const WordCount& l, const WordCount& r){
+                ranges::actions::sort([](const WordCount& l, const WordCount& r){
                     return l.count > r.count;
                 });
 
@@ -249,72 +254,80 @@ struct ViewModel
 
         {
             vector<pair<milliseconds, float>> groups = model.groupedtweets |
-                ranges::view::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                ranges::views::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
                     return make_pair(group.first.begin, static_cast<float>(group.second->tweets.size()));
-                });
+                }) |
+                ranges::to_vector;
 
             groups |=
-                ranges::action::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
+                ranges::actions::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
                     return l.first < r.first;
                 });
 
             data->groupedtpm = groups |
-                ranges::view::transform([&](const pair<milliseconds, float>& group){
+                ranges::views::transform([&](const pair<milliseconds, float>& group){
                     return group.second;
-                });
+                }) |
+                ranges::to_vector;
 
             data->maxtpm = data->groupedtpm.size() > 0 ? *ranges::max_element(data->groupedtpm) : 0.0f;
         }
 
         {
             vector<pair<milliseconds, float>> groups = model.groupedtweets |
-                ranges::view::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                ranges::views::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
                     return make_pair(group.first.begin, static_cast<float>(group.second->positive));
-                });
+                }) |
+                ranges::to_vector;
 
             groups |=
-                ranges::action::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
+                ranges::actions::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
                     return l.first < r.first;
                 });
 
             data->positivetpm = groups |
-                ranges::view::transform([&](const pair<milliseconds, float>& group){
+                ranges::views::transform([&](const pair<milliseconds, float>& group){
                     return group.second;
-                });
+                }) |
+                ranges::to_vector;
         }
 
         {
             vector<pair<milliseconds, float>> groups = model.groupedtweets |
-                ranges::view::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                ranges::views::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
                     return make_pair(group.first.begin, static_cast<float>(group.second->negative));
-                });
+                }) |
+                ranges::to_vector;
 
             groups |=
-                ranges::action::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
+                ranges::actions::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
                     return l.first < r.first;
                 });
 
             data->negativetpm = groups |
-                ranges::view::transform([&](const pair<milliseconds, float>& group){
+                ranges::views::transform([&](const pair<milliseconds, float>& group){
                     return group.second;
-                });
+                }) |
+                ranges::to_vector;
         }
 
         {
             vector<pair<milliseconds, float>> groups = model.groupedtweets |
-                ranges::view::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
+                ranges::views::transform([&](const pair<TimeRange, shared_ptr<TweetGroup>>& group){
                     return make_pair(group.first.begin, static_cast<float>(group.second->toxic));
-                });
+                }) |
+                ranges::to_vector;
 
             groups |=
-                ranges::action::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
+                ranges::actions::sort([](const pair<milliseconds, float>& l, const pair<milliseconds, float>& r){
                     return l.first < r.first;
                 });
 
             data->toxictpm = groups |
-                ranges::view::transform([&](const pair<milliseconds, float>& group){
+                ranges::views::transform([&](const pair<milliseconds, float>& group){
                     return group.second;
-                });
+                }) |
+                ranges::to_vector;
         }
     }
 

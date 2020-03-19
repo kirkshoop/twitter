@@ -37,7 +37,7 @@ using namespace rxcpp;
 using namespace rxcpp::rxo;
 using namespace rxcpp::rxs;
 
-#include <json.hpp>
+#include <nlohmann/json.hpp>
 using json=nlohmann::json;
 
 #include "rxcurl.h"
@@ -88,7 +88,7 @@ inline void updategroups(Model& model, milliseconds timestamp, milliseconds wind
             // Append current group's period to deque of groups in the model
             m.groups.push_back(key);
             // Ensure the group deque is sorted
-            m.groups |= ranges::action::sort(less<TimeRange>{});
+            m.groups |= ranges::actions::sort(less<TimeRange>{});
             // Create a tweet group for the current period and insert it into the map
             it = m.groupedtweets.insert(make_pair(key, make_shared<TweetGroup>())).first;
         }
@@ -744,16 +744,17 @@ int main(int argc, const char *argv[])
         filter([](const vector<Tweet>& tws){ return !tws.empty(); }) |
         rxo::map([=](const vector<Tweet>& tws) -> observable<Reducer> {
             vector<string> text = tws | 
-                ranges::view::transform([](Tweet tw){
+                ranges::views::transform([](Tweet tw){
                     auto& tweet = tw.data->tweet;
                     return tweettext(tweet);
-                });
+                }) |
+                ranges::to_vector;
             return sentimentrequest(poolthread, factory, settings["SentimentUrl"].get<string>(), settings["SentimentKey"].get<string>(), text) |
                 rxo::map([=](const string& body){
                     auto response = json::parse(body);
                     return Reducer([=](Model& m){
-                        auto combined = ranges::view::zip(response["Results"]["output1"], tws);
-                        for (const auto& b : combined) {
+                        auto combined = ranges::views::zip(response["Results"]["output1"], tws);
+                        ranges::for_each(combined, [&](const auto& b) {
                             auto sentiment = get<0>(b);
                             auto tweet = get<1>(b).data->tweet;
                             auto ts = timestamp_ms(get<1>(b));
@@ -771,7 +772,7 @@ int main(int argc, const char *argv[])
                                 isNeg && ++tg.negative;
                                 isPos && ++tg.positive;
                             });
-                        }
+                        });
                         return std::move(m);
                     });
                 });
@@ -948,15 +949,15 @@ int main(int argc, const char *argv[])
         rxo::map([](Tweet tw){
             auto e_s = duration_cast<seconds>(every).count();
             auto l_s = duration_cast<seconds>(length).count();
-            auto t_s = floor<seconds>(timestamp_ms(tw)).count();
+            auto t_s = std::chrono::floor<seconds>(timestamp_ms(tw)).count();
             auto te_s = t_s - (t_s % e_s);
             auto tstart_s = te_s - (l_s - e_s);
             auto tfinish_s = te_s + e_s;
             int begin = 0;
             int end = (tfinish_s - tstart_s) / e_s;
             return iterate(
-                ranges::view::ints(begin, end) | 
-                ranges::view::transform([=](int s){
+                ranges::views::ints(begin, end) | 
+                ranges::views::transform([=](int s){
                     return make_tuple(tstart_s + (e_s * s), tw);
                 }));
         }) |
@@ -988,7 +989,7 @@ int main(int argc, const char *argv[])
         rxo::window(6, 1) |
         rxo::map([=](observable<int> counts){
             return counts | average() |
-                zip(counts | last(), counts | first()) |
+                zip(counts | rxo::last(), counts | rxo::first()) |
                 filter(rxu::apply_to([](double avg, long last, long first){
                     // only keep if the average of three counts is less than 
                     // the last count and greater than the first count.
@@ -1284,7 +1285,7 @@ int main(int argc, const char *argv[])
                         keyword_list.reserve(128);
                         if (ImGui::InputText("Keywords", &keyword_list[0], keyword_list.capacity())) {
                             keyword_list.resize(strlen(&keyword_list[0]));
-                            settings["Query"]["Keywords"] = ranges::action::split(keyword_list, ranges::view::c_str(","));
+                            settings["Query"]["Keywords"] = ranges::actions::split(keyword_list, ranges::views::c_str(","));
                             changed = true;
                         }
                     }
@@ -1321,7 +1322,8 @@ int main(int argc, const char *argv[])
                     static vector<float> tpm;
                     tpm.clear();
                     tpm = m.tweetsperminute |
-                        ranges::view::transform([](int count){return static_cast<float>(count);});
+                        ranges::views::transform([](int count){return static_cast<float>(count);}) |
+                        ranges::to_vector;
                     ImVec2 plotextent(ImGui::GetContentRegionAvailWidth(),100);
                     if (!m.tweetsperminute.empty()) {
                         ImGui::Text("%s -> %s", 
@@ -1424,8 +1426,9 @@ int main(int argc, const char *argv[])
                 static vector<WordCount> top;
                 top.clear();
                 top = *vm.data->scope_words |
-                    ranges::view::filter([&](const WordCount& w){ return wordfilter.PassFilter(w.word.c_str()); }) |
-                    ranges::view::take(10);
+                    ranges::views::filter([&](const WordCount& w){ return wordfilter.PassFilter(w.word.c_str()); }) |
+                    ranges::views::take(10) |
+                    ranges::to_vector;
 
                 float maxCount = 0.0f;
                 for(auto& w : m.groups) {
@@ -1518,7 +1521,7 @@ int main(int argc, const char *argv[])
                         {m.positivewords[cursor->word], positivecolor},
                         {m.toxicwords[cursor->word], negativecolor}
                     }} |
-                    ranges::action::sort([](const CountedColor& l, const CountedColor& r){
+                    ranges::actions::sort([](const CountedColor& l, const CountedColor& r){
                         return l.first > r.first;
                     }))[0].second;
     
