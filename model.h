@@ -127,9 +127,9 @@ struct Model
     shared_ptr<shared> data = make_shared<shared>();
 };
 
-using Reducer = function<Model(Model&)>;
+using Reducer = function<Model(const Model&)>;
 
-auto noop = Reducer([](Model& m){return std::move(m);});
+auto noop = Reducer([](const Model& m){return m;});
 
 inline function<observable<Reducer>(observable<Reducer>)> nooponerror(string from = string{}) {
     return [=](observable<Reducer> s){
@@ -170,7 +170,7 @@ static int scope = scope_selected;
 struct ViewModel
 {
     ViewModel() {}
-    explicit ViewModel(Model& m) : m(m) {
+    explicit ViewModel(const Model& m) : m(m) {
         auto& model = *m.data;
 
         if (scope == scope_selected && idx >= 0 && idx < int(model.groups.size())) {

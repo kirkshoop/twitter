@@ -67,7 +67,7 @@ auto keep = minutes(10);
 // Create tweet groups for the period from 'timestamp'-'windows' till 'timestamp' and
 // delete the ones that are too old to keep
 template<class F>
-inline void updategroups(Model& model, milliseconds timestamp, milliseconds window, F&& f) {
+inline void updategroups(const Model& model, milliseconds timestamp, milliseconds window, F&& f) {
 
     auto& md = model.data;
 
@@ -665,7 +665,7 @@ int main(int argc, const char *argv[])
                     filter([](bool dj){ return !dj; }) | 
                     delay(length, tweetthread)) |
                 rxo::map([&](const vector<Tweet>& tws){
-                    return Reducer([&, tws](Model& m){
+                    return Reducer([&, tws](const Model& m){
                         for (auto& tw: tws) {
                             auto& tweet = tw.data->tweet;
                             auto json = tweet.dump();
@@ -673,7 +673,7 @@ int main(int argc, const char *argv[])
                             *jsonfile << json << "\r\n";
                         }
                         *jsonfile << flush;
-                        return std::move(m);
+                        return m;
                     });
                 });
         }) |
@@ -687,9 +687,9 @@ int main(int argc, const char *argv[])
     reducers.push_back(
         urlchanges | 
         rxo::map([=](string url){
-            return Reducer([=](Model& m){
+            return Reducer([=](const Model& m){
                 m.data->url = url;
-                return std::move(m);
+                return m;
             });
         }) |
         nooponerror() |
@@ -724,10 +724,10 @@ int main(int argc, const char *argv[])
         reducers.push_back(
             observable<>::interval(milliseconds(500), poolthread) |
             rxo::map([=](long){
-                return Reducer([=](Model& m){
+                return Reducer([=](const Model& m){
                     auto rangebegin = time_point_cast<milliseconds>(system_clock::now()).time_since_epoch();
                     updategroups(m, rangebegin, keep, [](TweetGroup&){});
-                    return std::move(m);
+                    return m;
                 });
             }) |
             nooponerror() |
@@ -752,7 +752,7 @@ int main(int argc, const char *argv[])
             return sentimentrequest(poolthread, factory, settings["SentimentUrl"].get<string>(), settings["SentimentKey"].get<string>(), text) |
                 rxo::map([=](const string& body){
                     auto response = json::parse(body);
-                    return Reducer([=](Model& m){
+                    return Reducer([=](const Model& m){
                         auto combined = ranges::views::zip(response["Results"]["output1"], tws);
                         ranges::for_each(combined, [&](const auto& b) {
                             auto sentiment = get<0>(b);
@@ -773,7 +773,7 @@ int main(int argc, const char *argv[])
                                 isPos && ++tg.positive;
                             });
                         });
-                        return std::move(m);
+                        return m;
                     });
                 });
         }) |
@@ -810,7 +810,7 @@ int main(int argc, const char *argv[])
                 rxo::map([=](const string& body){
                     auto response = json::parse(body);
 
-                    return Reducer([=](Model& m){
+                    return Reducer([=](const Model& m){
                         auto& scores = response["attributeScores"];
 
                         Perspective result{
@@ -831,7 +831,7 @@ int main(int argc, const char *argv[])
                             toxic && ++tg.toxic;
                         });
 
-                        return std::move(m);
+                        return m;
                     });
                 });
         }) |
@@ -860,7 +860,7 @@ int main(int argc, const char *argv[])
 
             auto words = splitwords(text);
 
-            return Reducer([=](Model& m){
+            return Reducer([=](const Model& m){
                 auto t = timestamp_ms(tw);
 
                 for (auto& word: words) {
@@ -875,7 +875,7 @@ int main(int argc, const char *argv[])
                     }
                 });
 
-                return std::move(m);
+                return m;
             });
         }) |
         nooponerror() |
@@ -896,7 +896,7 @@ int main(int argc, const char *argv[])
             auto tweetsperminute = source | 
                 start_with(Tweet{}) |
                 rxo::map([=](const Tweet& tw) {
-                    return Reducer([=](Model& md){
+                    return Reducer([=](const Model& md){
                         auto& m = *(md.data);
 
                         auto maxsize = duration_cast<seconds>(keep).count()/duration_cast<seconds>(every).count();
@@ -933,7 +933,7 @@ int main(int argc, const char *argv[])
                             m.tweetsperminute.pop_front();
                         }
 
-                        return std::move(md);
+                        return md;
                     });
                 });
             return tweetsperminute;
@@ -997,9 +997,9 @@ int main(int argc, const char *argv[])
                     return avg < last && avg > first;
                 })) |
                 rxo::map(rxu::apply_to([=](double , long , long ){
-                    return Reducer([=](Model& md){
+                    return Reducer([=](const Model& md){
                         Mix_PlayChannel(-1, dot, 0);
-                        return std::move(md);
+                        return md;
                     });
                 }));
         }) |
@@ -1016,7 +1016,7 @@ int main(int argc, const char *argv[])
         buffer_with_time(milliseconds(200), poolthread) |
         filter([](const vector<Tweet>& tws){ return !tws.empty(); }) |
         rxo::map([=](const vector<Tweet>& tws){
-            return Reducer([=](Model& md){
+            return Reducer([=](const Model& md){
                 auto& m = *(md.data);
                 m.tweets.insert(m.tweets.end(), tws.begin(), tws.end());
                 auto last = m.tweets.empty() ? milliseconds(0) : timestamp_ms(m.tweets.back());
@@ -1050,7 +1050,7 @@ int main(int argc, const char *argv[])
                     }
                 }
                 m.tweets.erase(m.tweets.begin(), end);
-                return std::move(md);
+                return md;
             });
         }) |
         nooponerror() |
@@ -1065,10 +1065,10 @@ int main(int argc, const char *argv[])
         window_with_time(milliseconds(200), poolthread) |
         rxo::map([](observable<Tweet> source){
             auto tweetsperminute = source | count() | rxo::map([](int count){
-                return Reducer([=](Model& md){
+                return Reducer([=](const Model& md){
                     auto& m = *(md.data);
                     m.total += count;
-                    return std::move(md);
+                    return md;
                 });
             });
             return tweetsperminute;
@@ -1088,14 +1088,14 @@ int main(int argc, const char *argv[])
 
     auto models = actions |
         // apply things that modify the model
-        scan(Model{}, [=](Model& m, Reducer& f){
+        scan(Model{}, [=](const Model& m, const Reducer& f){
             try {
                 auto r = f(m);
                 r.data->timestamp = mainthread.now();
                 return r;
             } catch (const std::exception& e) {
                 cerr << e.what() << endl;
-                return std::move(m);
+                return m;
             }
         }) | 
         // only view model updates every 200ms
@@ -1112,7 +1112,7 @@ int main(int argc, const char *argv[])
             return m.data->timestamp <= mainthread.now();
         }) |
         start_with(Model{}) |
-        rxo::map([](Model& m){
+        rxo::map([](const Model& m){
             return ViewModel{m};
         }) |
         as_dynamic();
